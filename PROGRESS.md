@@ -17,7 +17,7 @@
 | 04 | Historical dataset (exploration ladder) | ✅ done — 255 tests, ~53k rows / ~14k episodes |
 | 05 | Metric harness + baselines + **both splits** | ✅ done — 311 tests |
 | 05a | **Adversarial review + hardening** | ✅ done — 13 findings fixed, 352 tests |
-| 06 | Recovery-probability model + calibration | 🟡 in progress |
+| 06 | Recovery-probability model + calibration | ✅ done — 377 tests |
 | 07 | Compliance gate (non-bypassable) | ⬜ not started |
 | 08 | Sequencer / agent policy | ⬜ not started |
 | 09 | LLM comms layer (Hinglish/multilingual) | ⬜ not started |
@@ -110,6 +110,29 @@ side channel and Claim A's held-out metrics would be worthless.
 Enforced mechanically by `test_taxonomy_encodes_no_probabilities`, which fails if any
 numeric field is ever added to `FailureMode`. Adding one requires deleting that test:
 a deliberate speed bump, not an obstacle to route around.
+
+### D19 — Calibration is chosen by measurement, with "none" as a candidate (2026-08-21)
+Calibration is routinely treated as free. It is not, and both failure modes showed up
+here within an hour of each other.
+
+Isotonic regression is non-parametric and overfits thin data. And a booster trained with
+log-loss on a modest dataset is often *already* well calibrated, in which case any
+correction makes it worse — measured on a small run: raw ECE 0.0232 and slope 0.970,
+isotonic pushed it to 0.0317 *and* cost 2 points of PR-AUC.
+
+So all three candidates — `none`, `sigmoid`, `isotonic` — are fitted on the first half of
+the calibration slice, scored on the second, and the winner refitted on the whole slice.
+Selecting on data the base model never saw is what makes it legitimate rather than a way
+of picking the flattering number.
+
+It earned its place immediately. At full scale it chose **sigmoid** over the isotonic I
+had hardcoded (held-out ECE: sigmoid 0.0141, isotonic 0.0151, none 0.0207), which on
+test gave ECE 0.0205 → 0.0117 with PR-AUC **unchanged** at 0.6025. The hardcoded isotonic
+had been costing 0.0075 PR-AUC for worse calibration. On the customer split, isotonic won
+instead — so a fixed choice would have been wrong on one split or the other.
+
+`calibration_scores_` records every candidate. "We calibrated" and "we checked whether
+calibrating helped" are different claims.
 
 ### D16 — The policy is untrusted, and the harness proves it (2026-08-21)
 A black-box red team broke the harness five ways. All variants of one mistake: the
@@ -274,13 +297,73 @@ Filled in as they land. Empty cells are honest — they mean not yet measured.
 
 ### Claim A — recovery-probability model
 
+162,743 decision points · 43,657 episodes · 5,974 customers · 32 selectable features.
+Seed 20260821. Both splits verified clean before scoring.
+
 | Metric | Time split | Customer split |
-|--------|-----------|----------------|
-| PR-AUC | — | — |
-| ROC-AUC | — | — |
-| Brier score | — | — |
-| Calibration slope | — | — |
-| Baseline (failure-code prior only) PR-AUC | — | — |
+|--------|-----------:|---------------:|
+| n (test) | 51,322 | 49,116 |
+| base rate | 0.1507 | 0.2161 |
+| **PR-AUC** | **0.6025** | **0.6363** |
+| ROC-AUC | 0.9143 | 0.8950 |
+| Brier | 0.0788 | 0.1055 |
+| Calibration slope | 0.972 | 1.038 |
+| ECE | 0.0117 | 0.0095 |
+| Precision @ 10% capacity | 0.6374 | 0.7119 |
+| Lift @ 10% capacity | 4.23× | 3.29× |
+| — global prior PR-AUC | 0.1507 | 0.2161 |
+| — failure-code prior PR-AUC | 0.5483 | 0.5596 |
+
+**Lift over the strong baseline is modest: +0.054 PR-AUC on time (+9.9% relative),
++0.077 on customer (+13.7%).** The failure-code prior — a pivot table any merchant
+already has — gets most of the way. Reported this way round because the honest question
+is not "is the model good" but "is the model worth the machinery over a group mean."
+
+PR-AUC is not comparable across the two splits, since the base rates differ. Lift over
+base rate is: **4.23× time, 3.29× customer**, and ROC agrees (0.9143 vs 0.8950). So there
+is a real but small generalisation gap to unseen customers — in the feared direction,
+but nowhere near the size that would indicate memorisation.
+
+### Where the model is actually weak (per-disposition, time split)
+
+| Disposition | n | base rate | PR-AUC | ROC-AUC |
+|-------------|--:|----------:|-------:|--------:|
+| mandate_repair | 31,172 | 0.0168 | 0.1294 | 0.7694 |
+| retry_timing | 8,172 | 0.4634 | 0.6553 | 0.7216 |
+| retry_transient | 7,778 | 0.4060 | 0.5921 | 0.7113 |
+| customer_action | 2,037 | 0.0717 | 0.2997 | 0.7721 |
+| terminal | 1,871 | 0.0572 | 0.4115 | 0.8637 |
+| merchant_fix | 292 | 0.0308 | 0.0657 | 0.6302 |
+
+**This table is the important one, and it qualifies the headline.** Aggregate ROC-AUC of
+0.914 is largely the model separating hopeless dispositions from live ones — which
+`failure_code` already encodes and the taxonomy already knew. *Within* slice, where the
+decisions are actually hard, discrimination is 0.71–0.77. `merchant_fix` at 0.63 is
+barely better than a coin flip.
+
+The README must not claim 0.914 without this caveat attached.
+
+### What the model leans on (permutation importance, time split)
+
+| Feature | Importance |
+|---------|-----------:|
+| failure_code | 0.380 |
+| action | 0.114 |
+| decision_index | 0.039 |
+| within_upi_window | 0.038 |
+| decision_day_of_month | 0.018 |
+| cust_prior_contacts | 0.015 |
+
+**Concern, and the first thing to chase next:** `decision_day_of_month` scores 0.018 and
+`cust_prior_mean_failure_day` does not make the top twelve at all. The salary-cycle
+effect is the mechanism this whole dataset was built around, and the intended source of
+the model's edge over rules — a rule cannot know that *this* customer is paid on the
+22nd. The model does not appear to be exploiting it much.
+
+Two candidate explanations, untested: permutation importance against aggregate PR-AUC
+under-weights effects that only operate inside one disposition; or the signal is
+genuinely weak next to `failure_code`. Needs measuring within `retry_timing` alone
+before the sequencer is built on the assumption that it is there.
 
 ### Claim B — policy vs baselines
 

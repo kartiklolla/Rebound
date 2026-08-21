@@ -1,8 +1,9 @@
 # Adversarial review
 
-An independent black-box red team was run against parts 01–05 before any model
-was built. The reviewer had no access to the source — runtime introspection and
-behaviour only — and was asked to break the system by any available path.
+An independent black-box red team was run against the simulator, the evaluation
+harness and the policy interface. The reviewer had no access to the source —
+runtime introspection and behaviour only — and was asked to break the system by
+any available path.
 
 It found thirteen issues, five of them critical. All are fixed, and every one
 has a regression test in `tests/test_integrity.py` that reproduces the original
@@ -16,10 +17,10 @@ There is no server here and no attacker. The threat model is narrower and more
 uncomfortable than that.
 
 **The untrusted component is the policy** — and the policy is *me*. It is the
-part still being written, the part that will become model-driven in part 08, and
-the part whose numbers decide whether this project claims a result. The
-realistic failure is not sabotage. It is an author writing a subtly wrong policy
-and believing the number it produces.
+component under active development, the one that becomes model-driven, and the
+one whose numbers decide whether this project claims a result. The realistic
+failure is not sabotage. It is an author writing a subtly wrong policy and
+believing the number it produces.
 
 A project whose entire pitch is honest metrics has to be able to answer "how do
 you know your own harness isn't lying to you?" The answer should not be "I was
@@ -125,8 +126,9 @@ That leaves `episode_net_paise` in. Best single-threshold accuracy against
 | `episode_steps` | 0.7898 | no |
 | `episode_spent_paise` | 0.7427 | no |
 
-`episode_net_paise` *is* the label, arithmetically restated. I would have
-trained a model in part 06, seen a held-out AUC near 1.0, and been delighted.
+`episode_net_paise` *is* the label, arithmetically restated. The next thing to
+be built was the model; it would have posted a held-out AUC near 1.0 and looked
+like a triumph.
 
 **Fix:** `feature_columns()` is now an allowlist by subtraction — everything that
 is not an identifier, an outcome, behavioural metadata, or a latent. Deliberately

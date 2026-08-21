@@ -8,8 +8,7 @@ Razorpay AI Buildathon · Track 03, AI Revenue Recovery
 
 > 🚧 **In development.** Metrics tables in this README are filled in as they are
 > measured. Empty means not yet measured, never "measured and omitted."
-> See [PROGRESS.md](PROGRESS.md) for current state and [JOURNAL.md](JOURNAL.md) for
-> what broke along the way.
+> See [PROGRESS.md](PROGRESS.md) for current state.
 
 ---
 
@@ -57,12 +56,58 @@ that as a limitation to state rather than hide. The claims are split accordingly
 
 ## Metrics
 
-Not yet measured. See [PROGRESS.md](PROGRESS.md).
+### Claim A — recovery-probability model
+
+162,743 decision points, 43,657 episodes, 5,974 customers. Both splits verified clean
+before scoring.
+
+| | Time split | Customer split |
+|---|---:|---:|
+| n (test) | 51,322 | 49,116 |
+| base rate | 0.1507 | 0.2161 |
+| **PR-AUC** | **0.6025** | **0.6363** |
+| ROC-AUC | 0.9143 | 0.8950 |
+| ECE | 0.0117 | 0.0095 |
+| Calibration slope | 0.972 | 1.038 |
+| Precision @ 10% capacity | 0.6374 | 0.7119 |
+| failure-code prior (baseline) | 0.5483 | 0.5596 |
+
+**The caveat belongs next to the number, not below it.** Aggregate ROC-AUC of 0.914 is
+mostly the model separating hopeless failure dispositions from live ones — which the
+failure taxonomy already encodes. Within disposition, where the decisions are actually
+hard, discrimination is 0.71–0.77, and on `merchant_fix` it is 0.63. Lift over the
+failure-code prior is +0.054 PR-AUC: real, but modest.
+
+Full per-slice breakdown in [PROGRESS.md](PROGRESS.md).
+
+### Claim B — policy vs baselines
+
+Model-driven sequencer not yet built. Baselines measured, floor established:
+recovering payments cuts revocation from 8.78% (abandon everything) to 6.00% (retry
+ladder), while chasing relentlessly pushes it to 14.54% and destroys more value than
+doing nothing.
 
 ## Where we deliberately did not use an LLM
 
-Not yet written — see [PROGRESS.md](PROGRESS.md). (Summary: retry timing and rail
-selection are calibrated-probability problems, not language problems.)
+Retry timing and action selection are calibrated-probability problems, not language
+problems. An LLM asked to choose a retry moment would be uncalibrated, non-reproducible
+across runs, orders of magnitude more expensive per decision, and unauditable — and the
+output here gets multiplied by a rupee amount to make a spend decision, so the number has
+to *be* a probability.
+
+Calibration itself is treated the same way: `none`, `sigmoid` and `isotonic` are fitted
+on one slice, scored on a later disjoint one, and the winner is whichever measured best.
+It chose differently on the two splits, so a fixed choice would have been wrong on one of
+them.
+
+An LLM is used where language is genuinely the problem — customer communication and the
+merchant-facing root-cause narrative.
+
+## Adversarial review
+
+The simulator, harness and policy interface were red-teamed black-box before the model
+was built. Thirteen findings, five critical, all fixed, each with a regression test that
+reproduces the original attack. See [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md).
 
 ## Running it
 
