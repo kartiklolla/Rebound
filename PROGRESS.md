@@ -13,14 +13,15 @@
 |------|-------|-------|
 | 01 | Project scaffold | ✅ done |
 | 02 | Failure taxonomy (domain model) | ✅ done — 27 codes, 3 rails, 144 tests |
-| 03 | Synthetic mandate-failure generator | 🟡 in progress |
-| 04 | Metric harness + baseline policies | ⬜ not started |
-| 05 | Recovery-probability model + calibration | ⬜ not started |
-| 06 | Compliance gate (non-bypassable) | ⬜ not started |
-| 07 | Sequencer / agent policy | ⬜ not started |
-| 08 | LLM comms layer (Hinglish/multilingual) | ⬜ not started |
-| 09 | Batch runner + demo dashboard | ⬜ not started |
-| 10 | README, metrics writeup, provenance table | ⬜ not started |
+| 03 | World simulator + economics + provenance | ✅ done — 234 tests, rates calibrated to anchors |
+| 04 | Historical dataset (exploration ladder) | 🟡 in progress |
+| 05 | Metric harness + baseline policies | ⬜ not started |
+| 06 | Recovery-probability model + calibration | ⬜ not started |
+| 07 | Compliance gate (non-bypassable) | ⬜ not started |
+| 08 | Sequencer / agent policy | ⬜ not started |
+| 09 | LLM comms layer (Hinglish/multilingual) | ⬜ not started |
+| 10 | Batch runner + demo dashboard | ⬜ not started |
+| 11 | README, metrics writeup, provenance table | ⬜ not started |
 
 Legend: ⬜ not started · 🟡 in progress · ✅ done
 
@@ -108,6 +109,36 @@ side channel and Claim A's held-out metrics would be worthless.
 Enforced mechanically by `test_taxonomy_encodes_no_probabilities`, which fails if any
 numeric field is ever added to `FailureMode`. Adding one requires deleting that test:
 a deliberate speed bump, not an obstacle to route around.
+
+### D6 — Failure rates calibrated empirically, not in closed form (2026-08-21)
+The salary curve decides *who* fails and *when*; it does not produce the right
+*overall* rate on its own. Reconciling them in closed form is tractable but wrong in
+practice — failure draws compound, and deterministic structural failures (expiry,
+ceiling breaches, closed execution windows) stack on top. Measuring the realised rate
+and adjusting absorbs every interaction without enumerating them.
+
+Achieved vs target at n≈45k/19k/19k: UPI 0.5522 / 0.550, eNACH 0.3130 / 0.310, card
+0.2830 / 0.280.
+
+### D7 — Every world parameter carries a provenance tag (2026-08-21)
+`ANCHORED` (published figure), `DERIVED` (computed from one), or `ASSUMED` (judgement,
+no source). Machine-checked: tests fail if a parameter has no entry, or claims
+ANCHORED/DERIVED without citing a source.
+
+Current split is **1 anchored / 4 derived / 21 assumed** — 81% assumptions. Published
+in `docs/DATA_PROVENANCE.md` as the opening paragraph rather than buried, because it is
+the first number a panel will try to extract and volunteering it is worth more than
+defending it.
+
+The defence is scoping, not denial: the assumed parameters are mostly *shapes* (decay
+rates, dispersions), the anchored ones are the *levels* (marginal failure rates), and
+Claim B is a relative comparison run against the same world for every policy.
+
+### D8 — Banks are anonymised (2026-08-21)
+`BANK_01`–`BANK_12` rather than real bank names. The simulator assigns each an outage
+propensity, and attaching invented reliability figures to a named real institution
+would be publishing a claim about that organisation. The model learns exactly as much
+from an opaque id.
 
 ### D5 — Unknown failure codes raise instead of defaulting (2026-08-21)
 An unmapped code means the rail changed under us. Silently bucketing it as `TERMINAL`
