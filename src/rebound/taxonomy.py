@@ -89,6 +89,42 @@ class Action(StrEnum):
     STOP = "stop"
 
 
+#: Actions that present a debit against the mandate.
+#:
+#: These are the ones the rails' execution windows, retry caps and
+#: authentication ceilings bind on. Everything else in ``Action`` is a message
+#: or a request, and is governed by different rules.
+DEBIT_ACTIONS: frozenset[Action] = frozenset(
+    {Action.RETRY_SAME_RAIL, Action.RETRY_ALT_RAIL}
+)
+
+#: Actions that put something in front of the customer.
+#:
+#: Lives here rather than being read from ``world.CONTACT_ACTIONS`` because the
+#: compliance gate must not depend on the simulator: delete the simulator and
+#: quiet hours still apply. The two sets answer adjacent questions —
+#: ``world.CONTACT_ACTIONS`` is "what causes contact fatigue and revocation
+#: risk", this is "what arrives on a person's phone" — and today they differ by
+#: exactly one member, ``SEND_PRE_DEBIT_NOTIFICATION``, which reaches the
+#: customer but is a compliance artifact rather than collection pressure.
+#:
+#: That near-identity is asserted by ``test_the_two_contact_sets_stay_in_step``
+#: so the two cannot drift apart silently. If a future action belongs in one
+#: and not the other, that test is where the decision gets made explicitly.
+CUSTOMER_FACING_ACTIONS: frozenset[Action] = frozenset(
+    {
+        Action.NUDGE_SMS,
+        Action.NUDGE_WHATSAPP,
+        Action.NUDGE_EMAIL,
+        Action.VOICE_CALL,
+        Action.SEND_COLLECT_LINK,
+        Action.SEND_PRE_DEBIT_NOTIFICATION,
+        Action.REQUEST_REMANDATE,
+        Action.REQUEST_MANDATE_AMENDMENT,
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class FailureMode:
     """A single failure reason and its structural consequences."""
