@@ -56,29 +56,41 @@ that as a limitation to state rather than hide. The claims are split accordingly
 
 ## Metrics
 
-### Claim A — recovery-probability model
+### Claim A — recovery-probability models
 
 162,743 decision points, 43,657 episodes, 5,974 customers. Both splits verified clean
 before scoring.
 
+Two heads, because choosing *when* to present a retry and choosing *which action* to
+take are different questions with different labels. Immediate retry success runs 0.65
+within a few days of the customer's payday and 0.22 three weeks later — but against the
+episode-level label, even a perfect view of that latent adds almost nothing, because the
+episode label washes out the timing of any single decision.
+
 | | Time split | Customer split |
 |---|---:|---:|
-| n (test) | 51,322 | 49,116 |
-| base rate | 0.1507 | 0.2161 |
-| **PR-AUC** | **0.6025** | **0.6363** |
-| ROC-AUC | 0.9143 | 0.8950 |
-| ECE | 0.0117 | 0.0095 |
-| Calibration slope | 0.972 | 1.038 |
-| Precision @ 10% capacity | 0.6374 | 0.7119 |
+| **Action head** (`episode_recovered`) | | |
+| PR-AUC | 0.6074 | 0.6325 |
+| ROC-AUC | 0.9137 | 0.8941 |
+| ECE | 0.0107 | 0.0102 |
+| Precision @ 10% capacity | 0.6405 | 0.7034 |
 | failure-code prior (baseline) | 0.5483 | 0.5596 |
+| **Timing head** (`succeeded`, collecting actions) | | |
+| PR-AUC | 0.5869 | 0.6232 |
+| ROC-AUC | **0.9427** | **0.9187** |
+| ECE | 0.0061 | 0.0085 |
 
-**The caveat belongs next to the number, not below it.** Aggregate ROC-AUC of 0.914 is
+**The caveat belongs next to the number, not below it.** The action head's ROC-AUC of 0.914 is
 mostly the model separating hopeless failure dispositions from live ones — which the
 failure taxonomy already encodes. Within disposition, where the decisions are actually
 hard, discrimination is 0.71–0.77, and on `merchant_fix` it is 0.63. Lift over the
-failure-code prior is +0.054 PR-AUC: real, but modest.
+failure-code prior is +0.059 PR-AUC: real, but modest.
 
-Full per-slice breakdown in [PROGRESS.md](PROGRESS.md).
+Two salary-cycle proxy features were built, measured, and deleted — one was a duplicate
+of `billing_day`, the other correlated 0.20 with the hidden latent and still made the
+model worse. An oracle given the true latent reaches 0.7205 against our 0.6275, so
+roughly 80% of the timing signal remains unclaimed. Full per-slice breakdown and the
+measurements behind both deletions are in [PROGRESS.md](PROGRESS.md).
 
 ### Claim B — policy vs baselines
 

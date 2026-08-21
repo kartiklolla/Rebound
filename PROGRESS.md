@@ -17,7 +17,8 @@
 | 04 | Historical dataset (exploration ladder) | ✅ done — 255 tests, ~53k rows / ~14k episodes |
 | 05 | Metric harness + baselines + **both splits** | ✅ done — 311 tests |
 | 05a | **Adversarial review + hardening** | ✅ done — 13 findings fixed, 352 tests |
-| 06 | Recovery-probability model + calibration | ✅ done — 377 tests |
+| 06 | Recovery-probability model + calibration | ✅ done |
+| 07 | Two-headed model (timing + action) | ✅ done — 385 tests |
 | 07 | Compliance gate (non-bypassable) | ⬜ not started |
 | 08 | Sequencer / agent policy | ⬜ not started |
 | 09 | LLM comms layer (Hinglish/multilingual) | ⬜ not started |
@@ -354,16 +355,8 @@ The README must not claim 0.914 without this caveat attached.
 | decision_day_of_month | 0.018 |
 | cust_prior_contacts | 0.015 |
 
-**Concern, and the first thing to chase next:** `decision_day_of_month` scores 0.018 and
-`cust_prior_mean_failure_day` does not make the top twelve at all. The salary-cycle
-effect is the mechanism this whole dataset was built around, and the intended source of
-the model's edge over rules — a rule cannot know that *this* customer is paid on the
-22nd. The model does not appear to be exploiting it much.
-
-Two candidate explanations, untested: permutation importance against aggregate PR-AUC
-under-weights effects that only operate inside one disposition; or the signal is
-genuinely weak next to `failure_code`. Needs measuring within `retry_timing` alone
-before the sequencer is built on the assumption that it is there.
+**Investigated and resolved — see the two-headed model below.** The salary signal is
+real and large; it was being measured against the wrong label.
 
 ### Claim B — policy vs baselines
 
@@ -398,6 +391,73 @@ Point 3 is the opening the model has to exploit, and it is a narrow one: contact
 *selectively*, only where churn risk is low and nudge value is high. A rule cannot
 express that. A calibrated per-customer estimate can. If the learned policy cannot beat
 `fixed_ladder`, the honest conclusion is that this problem did not need a model.
+
+### The two-headed model
+
+The salary-cycle question from the single-model work turned out to be a question about
+the *label*, not the feature set.
+
+Immediate retry success against insufficient funds, by days since the customer's actual
+payday: **0.6505** at days 2–5, falling to **0.2156** at days 24–31. A threefold spread,
+present in the data the whole time.
+
+The ablation explains why the first model could not see it:
+
+| Target | no timing features | current | + oracle `days_since_salary` |
+|--------|-------------------:|--------:|----------------------------:|
+| `succeeded` (immediate) | 0.5870 | 0.6362 | **0.7332** |
+| `episode_recovered` (downstream) | 0.7415 | 0.7520 | 0.7870 |
+
+Against the downstream label, even a *perfect* view of the hidden latent adds almost
+nothing. The downstream label aggregates the whole episode, so later actions wash out
+the timing of any single decision — it dilutes exactly the signal a timing decision runs
+on. Both labels are correct; neither is sufficient alone.
+
+So there are two heads. **Timing** (`succeeded`, collecting actions only) prices *when*.
+**Action** (`episode_recovered`, all rows) prices *which*.
+
+| | Time split | Customer split |
+|---|---:|---:|
+| **Action head** PR-AUC | 0.6074 | 0.6325 |
+| ROC-AUC | 0.9137 | 0.8941 |
+| ECE | 0.0107 | 0.0102 |
+| **Timing head** PR-AUC | 0.5869 | 0.6232 |
+| ROC-AUC | **0.9427** | **0.9187** |
+| ECE | 0.0061 | 0.0085 |
+| (timing head n / base rate) | 27,708 / 0.1114 | 26,391 / 0.1605 |
+
+The timing head out-discriminates the action head on ROC (0.9427 vs 0.9137) and is
+better calibrated, which is the point: it is answering a question the action head was
+never able to.
+
+### Two salary proxies built, measured, and deleted
+
+Recorded because the second was a good idea that did not work, and deleting the evidence
+would leave someone to rebuild it.
+
+**`cust_prior_mean_failure_day`** — the average day-of-month the customer previously
+*failed* on. Every failure for a mandate lands on its fixed billing day, so it correlated
+**1.0000 with `billing_day`** and 0.0226 with the true salary day. A duplicate column
+wearing an explanation. Removing it alone lifted the action head from 0.6025 to 0.6074.
+
+**`cust_prior_recovery_day_mean`** and friends — the average day the customer previously
+*recovered* on. Successes only happen when the account has funds, so they should cluster
+near payday, and they do: correlation with the latent rose to **0.1972**, genuinely
+independent of `billing_day` (−0.04). It still made the model worse:
+
+| Feature set | PR-AUC (immediate, collecting actions) |
+|---|---:|
+| neither block | **0.6275** |
+| day-proxy only | 0.6237 |
+| both | 0.6210 |
+| recency only | 0.6164 |
+
+A 0.20 correlation is weak enough that the tree spends splits on it and overfits, and it
+is missing for ~37% of rows. Not noise — seed variance within a configuration is 0.0000.
+Correct reasoning, measurably negative result, feature deleted.
+
+**An oracle handed the true latent reaches 0.7205, so ~80% of the timing signal remains
+unclaimed.** Stated as a limitation rather than papered over.
 
 ### Splits actually produced
 
