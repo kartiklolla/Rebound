@@ -21,7 +21,7 @@
 | 07 | Two-headed model (timing + action) | ✅ done — 385 tests |
 | 07a | **Independent audit of the model layer + fixes** | ✅ done — 6 findings fixed, 387 tests |
 | 08 | Compliance gate (non-bypassable) | ✅ done — 9 rules, reviewed, 434 tests |
-| 09 | Sequencer / agent policy | ⬜ not started |
+| 09 | Sequencer / agent policy | ✅ built, reviewed — **loses to the ladder**, diagnosed |
 | 10 | LLM comms layer (Hinglish/multilingual) | ⬜ not started |
 | 11 | Batch runner + demo dashboard | ⬜ not started |
 | 12 | README, metrics writeup, provenance table | ⬜ not started |
@@ -406,6 +406,98 @@ them. And `TerminalStop` being POLICY was called a mislabelling - it is not, but
 the `Basis` docstring overclaimed by saying policy rules are ones a merchant "may
 legitimately configure differently". The label says who owns a rule, not how
 harmless it is to drop.
+
+### D23 - The sequencer works, and loses (2026-08-21)
+
+Built, reviewed, measured. It is not a win, and the number is reported as it is.
+
+| Policy | Recovery | Revocation | Contacts/ep | Net Rs/1000 |
+|---|---:|---:|---:|---:|
+| fixed_ladder | 0.5155 | 0.0465 | 0.00 | **+12,287** |
+| immediate_retry | 0.4516 | 0.0484 | 0.00 | -80,274 |
+| **rebound_sequencer** | **0.6279** | 0.0581 | 1.09 | -126,859 |
+| disposition_rules | 0.4632 | 0.0601 | 0.80 | -174,909 |
+| no_recovery | 0.0000 | 0.0950 | 0.00 | -1,085,275 |
+| aggressive_contact | 0.3585 | 0.1415 | 3.56 | -1,176,290 |
+
+**It recovers more than anything else and still destroys value.** It over-contacts,
+and the mechanism is identified.
+
+**The revocation head's marginal estimate has the wrong sign.** Across every
+action, `p_revoke(action) - p_revoke(stop)` comes out negative: the model says
+contacting a customer makes them *less* likely to revoke. In the training log
+`stop` carries the highest observed revocation rate (0.1038) and
+`retry_same_rail` the lowest (0.0582) - because the behavioural policy stops on
+episodes that are already lost, and a stopped episode never gets the chance to
+recover. "Stop causes revocation" is selection. The sequencer read it causally.
+
+This is **the label bug from D19 in a new costume**: an episode-level label
+attributed to a single decision. Every row in an episode carries the same
+`episode_revoked`, so what the head learned is "episodes where action *a*
+appeared revoke at rate X", dominated by which episodes get which actions rather
+than by what the action does. Identifying the causal quantity needs a per-action
+revocation label or interventional data. Neither can be produced by tuning.
+
+The floor at zero in `Candidate.marginal_revocation` is a guard against a
+known-bad estimate, not a fix for it - unclamped, 30.7% of candidates were
+*credited* for reducing revocation, and at a 12-cycle horizon a delta of -0.0659
+pays +0.79x the amount, enough to make a voice call profitable on any episode.
+
+Lowering the contact cap to 1 would turn the number green. That is fitting the
+policy to the scoreboard while the mechanism stays broken, so it was not done.
+
+### D24 - What the reviewer found in the sequencer (2026-08-21)
+
+Ten findings. The first is the one that matters.
+
+**The evaluation script reported +100% for a policy that crashed.** The
+sequencer exceeded the harness's default 120s budget after 2,001 of 6,898
+episodes. `evaluate_all` isolates a failed policy and substitutes an all-zero
+report - so zero revocation and zero contacts sorted it to the *top* of a table
+ordered by net value, and a lift computed as `(ours - base)/abs(base)` against a
+negative baseline turned "did nothing at all" into a +100.0% gain. The failure
+line printed one row above the table contradicting it.
+
+Three ordinary decisions compounded into a fabricated result: sort by net value,
+divide by a negative baseline, and isolate crashes so a run completes. Each is
+defensible alone. The script now refuses to tabulate an incomplete run at all,
+and prints a difference rather than a ratio.
+
+Also fixed:
+
+- **The do-nothing baseline was priced at the wrong time.** One STOP row at
+  `now`, while 84% of candidates were scheduled elsewhere - median 48 hours
+  away - and seven features derive from the timestamp. The maximised quantity
+  was the action effect confounded with a two-to-seven-day shift, which is
+  precisely what the timing head is separately choosing. Now one baseline per
+  distinct candidate time.
+- **Non-determinism across processes.** `legal_actions` returns a frozenset and
+  StrEnum hashing is salted by `PYTHONHASHSEED`; that order reached `max` over
+  expected values, and since `RETRY_SAME_RAIL` and `RETRY_ALT_RAIL` share cost,
+  value and revocation cost, exact ties broke by list position. Net value moved
+  2.2% between interpreters running identical code on an identical batch. A
+  same-process rerun test cannot see this.
+- **The trail double-wrote and named actions never taken** - `send_collect_link`
+  620 times where 9 reached the world, in the record a merchant reads to find
+  out what happened. One row per decision now, written after the branches
+  resolve; trail rows and gate-audit rows now match exactly (1,372 = 1,372).
+- **STOP never reached the compliance audit trail** - 497 of 3,129 decisions
+  absent from the record whose stated purpose is answering "why did nothing
+  happen for this customer".
+- A third sklearn call per decision whose output was discarded, and a dead
+  fallback branch that would have returned a refused time if reached.
+
+Two carried forward rather than fixed: the harness bumps execution to `now + 1
+minute` when a decision is scheduled at or before `now`, so an action approved
+exactly on a window boundary executes one minute outside it; and
+`fit_for_serving` claims dropping the unservable columns "costs some accuracy
+which is reported", while nothing measures that gap.
+
+The review also confirmed **zero train/serve skew** across 665 real decision
+points, every field value-compared against the training-time builder - and the
+test that was supposed to guarantee that was a subset check on column *names*
+that would have passed if the serving path dropped half its features. It now
+compares values.
 
 ## Evaluation splits
 

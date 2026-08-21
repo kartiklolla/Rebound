@@ -50,9 +50,15 @@ that as a limitation to state rather than hide. The claims are split accordingly
 - **Claim A (the model)** is a real supervised-learning result on a time-based held-out
   split. The model never sees the generator's parameters and has to learn its effects
   from data.
-- **Claim B (the policy)** is reported only as *relative lift over the production-standard
-  fixed ladder*, under identical simulator conditions. Absolute rupees recovered are
-  simulator-dependent and are not a real-world forecast.
+- **Claim B (the policy)** is reported against the production-standard fixed ladder under
+  identical simulator conditions and paired random draws. Absolute rupees are
+  simulator-dependent and are not a real-world forecast — read the *ordering* of the
+  policies, not the magnitudes.
+
+  Reported as a **difference, never a ratio.** Several policies score negative net value
+  here, and a ratio of two negatives reads as a gain when the second is worse than the
+  first. That is not hypothetical: it is exactly how this project's evaluation script
+  once reported +100.0% for a policy that had crashed.
 
 ## Metrics
 
@@ -109,6 +115,22 @@ not been re-measured since the fixes below, and the old figures are not carried 
 though they were current. Full per-slice breakdown and the measurements behind both
 deletions are in [PROGRESS.md](PROGRESS.md).
 
+### What review found in the evaluation itself
+
+The sequencer's first reported result was **+100.0% over the fixed ladder**, for
+a policy that had crashed. It exceeded the harness's 120-second budget after
+2,001 of 6,898 episodes; `evaluate_all` isolates a failed policy and substitutes
+an all-zero report; zero revocation and zero contacts then sorted that row to the
+top of a table ordered by net value; and a lift computed against a negative
+baseline turned "did nothing at all" into a gain. The failure notice printed one
+line above the table that contradicted it.
+
+No single piece of that was a bug. Sorting by net value, isolating crashes so one
+bad policy does not destroy a half-hour run, and expressing lift as a ratio are
+all reasonable. They composed into a fabricated headline. The script now refuses
+to tabulate an incomplete run at all, and reports a difference rather than a
+ratio.
+
 ### What a second audit found
 
 The model layer was audited independently after it was built, by an agent with no access
@@ -140,10 +162,41 @@ every one of them had been making the model quietly worse while the tests report
 
 ### Claim B — policy vs baselines
 
-Model-driven sequencer not yet built. Baselines measured, floor established:
-recovering payments cuts revocation from 8.78% (abandon everything) to 6.00% (retry
-ladder), while chasing relentlessly pushes it to 14.54% and destroys more value than
-doing nothing.
+**The sequencer recovers more than any baseline and still loses on net value.**
+Reported as measured.
+
+| Policy | Recovery | Revocation | Contacts/ep | Net ₹/1000 |
+|---|---:|---:|---:|---:|
+| `fixed_ladder` | 0.5155 | 0.0465 | 0.00 | **+12,287** |
+| `immediate_retry` | 0.4516 | 0.0484 | 0.00 | −80,274 |
+| **`rebound_sequencer`** | **0.6279** | 0.0581 | 1.09 | −126,859 |
+| `disposition_rules` | 0.4632 | 0.0601 | 0.80 | −174,909 |
+| `no_recovery` | 0.0000 | 0.0950 | 0.00 | −1,085,275 |
+| `aggressive_contact` | 0.3585 | 0.1415 | 3.56 | −1,176,290 |
+
+It over-contacts, and the reason is identified rather than guessed at: **the
+revocation head's marginal estimate has the wrong sign.** Across every action,
+`p_revoke(action) − p_revoke(stop)` is negative — the model says contacting a
+customer makes them *less* likely to revoke.
+
+The training log shows why. `stop` carries the highest observed revocation rate
+(0.1038), `retry_same_rail` the lowest (0.0582), because the behavioural policy
+stops on episodes that are already lost and a stopped episode never gets the
+chance to recover. "Stop causes revocation" is selection, not causation, and the
+sequencer read it causally.
+
+This is the same error as the label bug that shaped the two-headed model, in a
+new place: **an episode-level label cannot identify a single action's causal
+effect.** Every row in an episode carries the same `episode_revoked`, so the head
+learned which *episodes* get which actions rather than what an action does.
+Fixing it needs a per-action revocation label or interventional data.
+
+Lowering the contact cap to 1 would make this table green. That is fitting the
+policy to the scoreboard while the mechanism stays broken, and it was not done.
+
+The baseline floor stands: recovering payments cuts revocation from 9.50%
+(abandon everything) to 4.65% (retry ladder), while chasing relentlessly pushes
+it to 14.15% and destroys more value than doing nothing.
 
 ## The compliance gate
 
