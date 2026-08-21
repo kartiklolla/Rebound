@@ -51,45 +51,33 @@ class ParamSource:
 
 
 # ==========================================================================
-# Regulatory constants — facts about the world, not modelling choices
+# Regulatory constants — re-exported, not owned
 # ==========================================================================
+#
+# These live in ``rebound.regulation`` now. They were never simulator
+# parameters: a parameter is the generator's opinion, and getting one wrong
+# shifts a measured number. A regulatory constant is a claim about the world,
+# and getting one wrong makes the system do something non-compliant while
+# reporting that it complied — which no amount of testing against our own
+# simulator can catch, because the simulator would be wrong the same way.
+#
+# Re-exported here so existing importers keep working.
 
-#: Windows in which a UPI Autopay mandate execution may be presented.
-#:
-#: NPCI confined recurring executions to off-peak slots to relieve load during
-#: the morning rush. Presenting outside these windows is not a bad idea that
-#: might work anyway — it is refused. This is what makes retry *timing* a
-#: compliance question in this domain rather than purely an optimisation.
-#:
-#: SOURCES DISAGREE. Some reporting describes a single post-21:30 window;
-#: more detailed coverage describes the three below, consistent with peak hours
-#: being 10:00–13:00. Encoding the three-window version and flagging the
-#: conflict — see PROGRESS.md "to verify from primary sources". This must be
-#: confirmed against the NPCI circular before the README asserts it.
-UPI_EXECUTION_WINDOWS: tuple[tuple[dt.time, dt.time], ...] = (
-    (dt.time(0, 0), dt.time(10, 0)),
-    (dt.time(13, 0), dt.time(17, 0)),
-    (dt.time(21, 30), dt.time(23, 59, 59)),
+from rebound.regulation import (  # noqa: E402
+    AFA_EXEMPT_CEILING_PAISE,
+    MAX_EXECUTIONS_PER_CYCLE,
+    MAX_RETRIES_PER_CYCLE,
+    PRE_DEBIT_NOTIFICATION_HOURS,
+    UPI_EXECUTION_WINDOWS,
 )
 
-#: Hours of advance notice required before debiting under the RBI e-mandate
-#: framework. Missing it blocks the debit outright.
-PRE_DEBIT_NOTIFICATION_HOURS = 24
-
-#: Executions permitted per mandate per billing cycle: one attempt plus retries.
-#: The cap is the reason "just retry more" is not an available strategy, and
-#: therefore the reason choosing *which* attempts to spend has value.
-MAX_EXECUTIONS_PER_CYCLE = 1
-MAX_RETRIES_PER_CYCLE = 3
-
-#: Ceiling below which a recurring debit needs no additional factor of
-#: authentication. Above it the customer must authenticate every cycle, which
-#: is why a price rise across this line converts a healthy mandate into a
-#: recurring CARD_AFA_REQUIRED failure.
-#:
-#: Flagged for primary-source confirmation — the threshold has been revised
-#: more than once and category-specific carve-outs exist.
-AFA_EXEMPT_CEILING_PAISE = 15_000 * 100
+__all_regulatory__ = (
+    "AFA_EXEMPT_CEILING_PAISE",
+    "MAX_EXECUTIONS_PER_CYCLE",
+    "MAX_RETRIES_PER_CYCLE",
+    "PRE_DEBIT_NOTIFICATION_HOURS",
+    "UPI_EXECUTION_WINDOWS",
+)
 
 
 # ==========================================================================

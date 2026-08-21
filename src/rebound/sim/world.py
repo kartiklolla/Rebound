@@ -47,6 +47,7 @@ from rebound.sim.params import (
     UPI_EXECUTION_WINDOWS,
     WorldParams,
 )
+from rebound.regulation import within_upi_execution_window  # re-exported
 from rebound.taxonomy import (
     Action,
     Disposition,
@@ -293,17 +294,6 @@ class ActionOutcome:
 # ==========================================================================
 # Time helpers
 # ==========================================================================
-
-
-def within_upi_execution_window(at: dt.datetime) -> bool:
-    """Whether a UPI Autopay execution may be presented at this moment.
-
-    Outside these windows the presentation is refused by the rail. Not a
-    heuristic — a hard constraint, and the reason retry timing here is a
-    compliance question and not only an optimisation.
-    """
-    clock = at.time()
-    return any(start <= clock <= end for start, end in UPI_EXECUTION_WINDOWS)
 
 
 def _days_since_salary(salary_day: int, on: dt.date) -> int:
