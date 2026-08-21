@@ -15,8 +15,8 @@
 | 02 | Failure taxonomy (domain model) | ✅ done — 27 codes, 3 rails, 144 tests |
 | 03 | World simulator + economics + provenance | ✅ done — 234 tests, rates calibrated to anchors |
 | 04 | Historical dataset (exploration ladder) | ✅ done — 255 tests, ~53k rows / ~14k episodes |
-| 05 | Metric harness + baselines + **both splits** | 🟡 in progress |
-| 06 | Recovery-probability model + calibration | ⬜ not started |
+| 05 | Metric harness + baselines + **both splits** | ✅ done — 311 tests |
+| 06 | Recovery-probability model + calibration | 🟡 in progress |
 | 07 | Compliance gate (non-bypassable) | ⬜ not started |
 | 08 | Sequencer / agent policy | ⬜ not started |
 | 09 | LLM comms layer (Hinglish/multilingual) | ⬜ not started |
@@ -109,6 +109,40 @@ side channel and Claim A's held-out metrics would be worthless.
 Enforced mechanically by `test_taxonomy_encodes_no_probabilities`, which fails if any
 numeric field is ever added to `FailureMode`. Adding one requires deleting that test:
 a deliberate speed bump, not an obstacle to route around.
+
+### D12 — Customers churn on their own, not only when contacted (2026-08-21)
+The first version of the world made merchant contact the *only* cause of revocation. So
+`fixed_ladder`, which never contacts, showed a revocation rate of exactly 0.0000 and won
+the comparison by construction. The optimal policy in that world is to never speak to
+anyone.
+
+Added a passive revocation hazard: an unresolved failed payment is itself a churn
+trigger, independent of what the merchant does. This inverts the economics into
+something true — *recovering a payment prevents churn* — and turns contact into a real
+trade-off (marginal added risk against removing the passive risk) rather than a rigged
+one.
+
+Effect: floor revocation 8.78%, ladder 6.00%, aggressive contact 14.54%.
+
+### D13 — Common random numbers across policies (2026-08-21)
+Each episode gets a random stream seeded from its index, so every policy meets the same
+customer under the same luck. With revocation events at a few percent, unpaired draws
+mean a large share of any measured difference is just which policy drew better dice.
+
+### D14 — Value is reported against the do-nothing floor (2026-08-21)
+Raw net is negative for every policy, correctly: a failed cycle risks twelve cycles of
+LTV against one cycle of upside. Reporting "−447,375" invites the reading "this policy
+loses money" when it means "this policy loses much less than doing nothing". The floor
+policy is the denominator that makes any other number interpretable.
+
+### D15 — A strong hand-written baseline is included on purpose (2026-08-21)
+`disposition_rules` reads the taxonomy, stops on terminal codes, notifies on merchant
+defects, nudges before retrying when the customer is the blocker, and aims retries at
+the start of the month. Roughly what a careful engineer builds in a week without ML.
+
+Beating `fixed_ladder` proves little — it retries revoked mandates. If the learned
+sequencer cannot beat careful rules, this problem did not need a model, and that is far
+better to discover in week one than in front of a panel.
 
 ### D9 — Rows are labelled with the downstream episode outcome (2026-08-21)
 The obvious label — "did *this* action recover the money" — is causally clean and badly
@@ -216,13 +250,50 @@ Filled in as they land. Empty cells are honest — they mean not yet measured.
 | Calibration slope | — | — |
 | Baseline (failure-code prior only) PR-AUC | — | — |
 
-### Claim B — policy vs baselines (held-out batch)
+### Claim B — policy vs baselines
 
-| Policy | Recovery rate | ₹ recovered / 1000 | Cost per ₹ recovered | Attempts used |
-|--------|---------------|--------------------|-----------------------|---------------|
-| Fixed 3-retry ladder (production standard) | — | — | — | — |
-| Immediate retry | — | — | — | — |
-| Rebound (ours) | — | — | — | — |
+Batch of 4,703 failed debits, seed 20260821, common random numbers across policies.
+"Value preserved" is measured against abandoning the debt, because every raw net figure
+is negative — a failed cycle risks twelve cycles of lifetime value while offering one
+cycle of revenue as the upside. Failures destroy value; the only question is how much a
+policy saves.
+
+| Policy | Recovery | Revocation | Value preserved ₹/1000 | True cost per ₹ | Contacts/ep |
+|--------|----------|-----------|------------------------|-----------------|-------------|
+| `fixed_ladder` (production standard) | 0.3264 | 0.0600 | **938,202** | 2.05 | 0.00 |
+| `immediate_retry` | 0.2824 | 0.0655 | 803,482 | 2.58 | 0.00 |
+| `disposition_rules` (best hand-written) | 0.3255 | 0.0763 | 777,732 | 2.43 | 1.18 |
+| `no_recovery` (floor) | 0.0000 | 0.0878 | 0 | ∞ | 0.00 |
+| `aggressive_contact` | 0.2222 | 0.1454 | **−346,088** | 6.87 | 3.70 |
+| **Rebound (learned)** | — | — | — | — | — |
+
+Three things this table already establishes, before any model exists:
+
+1. **Recovery prevents churn.** Doing nothing revokes 8.78% of mandates; retrying pulls
+   that to 6.00%. That is the actual argument for doing recovery at all.
+2. **Chasing harder is worse than doing nothing.** `aggressive_contact` recovers *less*
+   than the ladder (it burns the window on nudges) and churns 14.54%, ending below the
+   floor. Recovery rate as a headline metric would rank it respectably.
+3. **The best hand-written rules currently lose to the naive ladder.** `disposition_rules`
+   stops on terminal codes and spends less per rupee, but its 1.18 contacts per episode
+   drive revocation from 6.00% to 7.63%, and at twelve cycles of LTV per revocation that
+   costs more than the savings.
+
+Point 3 is the opening the model has to exploit, and it is a narrow one: contact
+*selectively*, only where churn risk is low and nudge value is high. A rule cannot
+express that. A calibrated per-customer estimate can. If the learned policy cannot beat
+`fixed_ladder`, the honest conclusion is that this problem did not need a model.
+
+### Splits actually produced
+
+| Split | Train rows | Test rows | Train customers | Test customers | Dropped |
+|-------|-----------|-----------|-----------------|----------------|---------|
+| time | 9,014 | 4,362 | 750 | 521 | 706 |
+| customer | 10,177 | 3,905 | 562 | 228 | 0 |
+
+The 706 dropped rows are episodes straddling the time cut. Dropped rather than assigned:
+putting them in train leaks post-cut information backwards, putting them in test scores
+the model on episodes it trained on.
 
 ---
 

@@ -136,6 +136,7 @@ class WorldParams:
     # -- revocation risk --------------------------------------------------
     revocation_base_rate: float = 0.021
     revocation_fatigue_growth: float = 1.45
+    passive_revocation_rate: float = 0.09
 
     # -- transient failures ----------------------------------------------
     outage_mean_hours: float = 5.5
@@ -288,6 +289,19 @@ PARAM_PROVENANCE: dict[str, ParamSource] = {
         "contact_fatigue_decay: chasing harder both works less and costs more. "
         "This pairing is what stops 'contact everyone constantly' from being "
         "the optimal policy.",
+    ),
+    "passive_revocation_rate": ParamSource(
+        Provenance.DERIVED,
+        "Probability that an unresolved failed payment ends in revocation with "
+        "no merchant contact at all, for a customer of median churn intent. "
+        "Customers cancel on their own; reported revocation volumes are "
+        "attributed largely to insufficient balances rather than to dunning. "
+        "Without this the only cause of churn in the world is merchant "
+        "contact, which makes 'never speak to anyone' optimal and hands the "
+        "comparison to any policy that only retries. It also inverts the "
+        "central economics: recovering a payment should *prevent* churn, and "
+        "that is only true if unrecovered payments cause it.",
+        _NPCI_REVOCATIONS,
     ),
     # -- transient failures ----------------------------------------------
     "outage_mean_hours": ParamSource(

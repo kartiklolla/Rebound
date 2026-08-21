@@ -225,6 +225,11 @@ def generate_log(
                 config.max_ladder_steps,
                 deadline=presented_at + dt.timedelta(days=config.recovery_window_days),
             )
+            # Settle passive churn before labelling, so the training data
+            # reflects the same dynamics the policy will be evaluated against.
+            # A model trained on a world where giving up is free would
+            # systematically under-value recovery.
+            world.close_episode(episode)
             rows.extend(_attach_outcome_labels(episode_rows, episode))
 
             # Update history only after the episode is fully recorded.

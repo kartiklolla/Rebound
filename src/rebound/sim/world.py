@@ -576,6 +576,58 @@ class World:
         )
         return float(np.clip(hazard, 0.0, 0.5))
 
+    def passive_revocation_hazard(self, episode: Episode) -> float:
+        """Probability an unresolved episode ends in revocation on its own.
+
+        Independent of anything the merchant did. A customer whose payment
+        failed and was never resolved has a live reason to cancel — often the
+        same reason the payment failed in the first place.
+
+        This is what makes the economics honest. Without it the only source of
+        churn in the world is merchant contact, so the optimal policy is to
+        never contact anyone and any retry-only baseline wins by construction.
+        With it, a *recovered* payment prevents the churn that an abandoned one
+        invites, which is both true and the actual argument for doing recovery
+        at all.
+        """
+        p = self.params
+        mean_churn_intent = p.churn_intent_alpha / (
+            p.churn_intent_alpha + p.churn_intent_beta
+        )
+        relative_intent = episode.customer.churn_intent / mean_churn_intent
+        return float(np.clip(p.passive_revocation_rate * relative_intent, 0.0, 0.9))
+
+    def close_episode(self, episode: Episode) -> bool:
+        """Settle an episode once the policy is finished with it.
+
+        Resolves passive churn for episodes that ended without recovery. Must
+        be called exactly once per episode, by whatever is driving the rollout;
+        skipping it would silently remove the cost of giving up.
+
+        Returns whether the customer revoked at close.
+        """
+        if episode.resolved or episode.revoked:
+            return False
+        if self.rng.random() >= self.passive_revocation_hazard(episode):
+            return False
+
+        destroyed = revocation_cost_paise(episode.mandate.cycle_amount_paise)
+        episode.revoked = True
+        episode.ledger = episode.ledger.plus_destruction(destroyed)
+        episode.history.append(
+            ActionOutcome(
+                action=Action.STOP,
+                at=episode.failed_at,
+                succeeded=False,
+                recovered_paise=0,
+                cost_paise=0,
+                revoked=True,
+                destroyed_paise=destroyed,
+                detail="customer revoked after the payment went unrecovered",
+            )
+        )
+        return True
+
     # -- the step function ------------------------------------------------
 
     def apply(self, episode: Episode, action: Action, at: dt.datetime) -> ActionOutcome:
