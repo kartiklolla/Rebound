@@ -16,6 +16,7 @@
 | 03 | World simulator + economics + provenance | ✅ done — 234 tests, rates calibrated to anchors |
 | 04 | Historical dataset (exploration ladder) | ✅ done — 255 tests, ~53k rows / ~14k episodes |
 | 05 | Metric harness + baselines + **both splits** | ✅ done — 311 tests |
+| 05a | **Adversarial review + hardening** | ✅ done — 13 findings fixed, 352 tests |
 | 06 | Recovery-probability model + calibration | 🟡 in progress |
 | 07 | Compliance gate (non-bypassable) | ⬜ not started |
 | 08 | Sequencer / agent policy | ⬜ not started |
@@ -109,6 +110,37 @@ side channel and Claim A's held-out metrics would be worthless.
 Enforced mechanically by `test_taxonomy_encodes_no_probabilities`, which fails if any
 numeric field is ever added to `FailureMode`. Adding one requires deleting that test:
 a deliberate speed bump, not an obstacle to route around.
+
+### D16 — The policy is untrusted, and the harness proves it (2026-08-21)
+A black-box red team broke the harness five ways. All variants of one mistake: the
+report was read off the object handed to the untrusted component, and the audit trail
+that would have caught it was built and never compared.
+
+Two defences now. **Structural** — policies get a frozen `EpisodeView`, never the live
+episode, with no path back to mutable state. **Reconciliation** — every reported figure
+is rebuilt from outcomes the harness itself observed, and `_Observed.verify` re-derives
+episode state after every step, raising `IntegrityError` on disagreement.
+
+The threat model is not sabotage. The policy is the component still being written, and
+the realistic failure is an author believing a subtly wrong policy's numbers. Full
+write-up in `docs/SECURITY_REVIEW.md`.
+
+### D17 — `EpisodeView` also closes a latent leak the reviewer could not see (2026-08-21)
+`Episode.customer` handed policies the whole `Customer` — `salary_day`,
+`balance_health`, `engagement`, `churn_intent`, `preferred_channel`. The learned policy
+could have read churn intent directly and posted meaningless numbers.
+
+Invisible from black box, because the baselines happen not to use those fields. Found by
+asking what a component *could* reach rather than what it currently does.
+
+### D18 — Features are an allowlist, not a denylist (2026-08-21)
+`FORBIDDEN_COLUMNS` guards latents, so `df.drop(columns=[label] + FORBIDDEN_COLUMNS)`
+leaves `episode_net_paise` in — which predicts the label at accuracy **1.000** against a
+base rate of 0.269, because it is the label restated.
+
+`feature_columns()` now subtracts identifiers, outcomes, metadata and latents. A denylist
+fails open; this fails closed. Backed by a threshold-sweep probe that fails on any
+selectable feature above 97% accuracy, so it catches the next one whatever it is called.
 
 ### D12 — Customers churn on their own, not only when contacted (2026-08-21)
 The first version of the world made merchant contact the *only* cause of revocation. So
