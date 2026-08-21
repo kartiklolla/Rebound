@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Generated data and model artefacts (reproducible from a seed; see docs/DATA_PROVENANCE.md)
+data/*.parquet
+data/*.csv
+artifacts/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
