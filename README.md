@@ -145,7 +145,43 @@ recovering payments cuts revocation from 8.78% (abandon everything) to 6.00% (re
 ladder), while chasing relentlessly pushes it to 14.54% and destroys more value than
 doing nothing.
 
+## The compliance gate
+
+The agent proposes; the gate disposes. Not by convention — structurally. An
+executor accepts only an `ApprovedAction`, and one cannot be minted outside
+`rebound.compliance`, so there is no path from "I'd like to retry this" to "a
+retry happened" that skips adjudication. The alternative design, a
+`check_compliance()` call before acting, is correct only as long as every future
+call site remembers one line, and that failure is silent.
+
+**Three verdicts, not two.** A gate that only says yes or no turns every timing
+rule into a lost recovery — "denied" tells a sequencer to abandon a retry that is
+perfectly legal in four hours. `DEFER` carries the moment it becomes permissible,
+and that moment is re-adjudicated until it settles, because constraints here are
+intervals rather than deadlines: clearing the 24-hour notice requirement can drop
+you inside a closed NPCI window.
+
+**Law and house policy are labelled separately.** Five regulatory rules (mandate
+alive, pre-debit notice, AFA ceiling, execution windows, presentation cap) and
+four policy ones (quiet hours, contact cap, spend budget, terminal stop). A
+merchant must be able to see which constraints they may tune, and this system
+must not claim regulatory cover for its own preferences — labelling a
+self-imposed contact cap "compliance" makes a product decision unarguable by
+misattributing it to a regulator.
+
+**The regulatory constants are unverified, and the gate says so.**
+`unverified_rules()` names every rule resting on secondary reporting rather than
+a primary source, and the NPCI window conflict is recorded as disputed with a
+note on which direction the encoded reading errs. An audit trail implying a
+diligence that was never done is worse than no audit trail. Confirming these
+against the circulars is tracked as open work, not quietly assumed.
+
 ## Where we deliberately did not use an LLM
+
+Compliance is the clearest case. A gate decision has to be deterministic,
+reproducible on replay, explainable by citation to the rule that fired, and
+identical for two customers in identical circumstances. A language model is none
+of those. The gate is boolean logic because boolean logic is the correct tool.
 
 Retry timing and action selection are calibrated-probability problems, not language
 problems. An LLM asked to choose a retry moment would be uncalibrated, non-reproducible

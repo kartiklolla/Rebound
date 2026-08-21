@@ -20,7 +20,7 @@
 | 06 | Recovery-probability model + calibration | ✅ done |
 | 07 | Two-headed model (timing + action) | ✅ done — 385 tests |
 | 07a | **Independent audit of the model layer + fixes** | ✅ done — 6 findings fixed, 387 tests |
-| 08 | Compliance gate (non-bypassable) | ⬜ not started |
+| 08 | Compliance gate (non-bypassable) | ✅ done — 9 rules, reviewed, 434 tests |
 | 09 | Sequencer / agent policy | ⬜ not started |
 | 10 | LLM comms layer (Hinglish/multilingual) | ⬜ not started |
 | 11 | Batch runner + demo dashboard | ⬜ not started |
@@ -326,6 +326,86 @@ the hard ones to find, because nothing looks wrong.
 described `test_no_two_features_are_identical` as the guard preventing recurrence, and it
 did not exist. Caught on re-read, written, and it passes - but it is the same failure mode
 as the two tautological tests: describing a check rather than having one.
+
+### D21 - The gate cannot be forgotten, and it can say "not yet" (2026-08-21)
+
+The obvious build is `check_compliance(action) -> bool` called before acting.
+That is correct exactly as long as every future call site remembers one line. The
+failure is silent, it is a single omission, and the tests still pass because the
+tests call the checker directly - the same shape as `decision_index` being
+*documented* as an identifier and never added to the identifier set.
+
+So the type carries it. An executor accepts only an `ApprovedAction`, which
+cannot be minted outside `rebound.compliance`. Copying one is allowed (a copy of
+a permission is the same permission); *altering* one is not, which is why the
+token is init-only. `dataclasses.replace` was a live forgery route until the
+reviewer found it: it copied the valid token through with every other field, so
+an approved retry could be edited into an approved voice call using nothing but
+the public API.
+
+**Three verdicts, not two.** A gate that only says yes or no turns every timing
+rule into a lost recovery: "denied" tells the sequencer to abandon a retry that
+is legal in four hours. `DEFER` carries the moment it becomes permissible.
+
+**Law and house policy are labelled separately.** Five REGULATORY rules, four
+POLICY. The point is honesty in both directions - a merchant must see which
+constraints they may tune, and this system must not claim regulatory cover for
+its own preferences. Calling a self-imposed contact cap "compliance" makes a
+product decision unarguable by misattributing it to a regulator.
+
+**Regulatory constants moved out of `sim/params.py` into `rebound.regulation`.**
+A compliance gate importing from the simulator has its dependency backwards. More
+importantly the two kinds of error differ: a wrong simulator parameter shifts a
+measured number, a wrong regulatory constant makes the system non-compliant
+*while reporting that it complied* - which no amount of testing against our own
+simulator can catch, because the simulator would be wrong in the same direction.
+All five constants are unverified; `unverified_rules()` reports which rules rest
+on them rather than letting an audit trail imply diligence that never happened.
+
+### D22 - What the reviewer found in the gate (2026-08-21)
+
+Reviewed by an independent agent while it was being written rather than after.
+Ten findings. The three that mattered:
+
+**The deferral time was a time the gate would itself refuse.** `max()` over every
+deferral is only correct if each constraint means "permitted from T onward". The
+execution window is not that shape - it is a set of intervals, and leaving one
+does not put you inside the next. A UPI retry blocked at 11:00 by both an
+immature notice (matures 18:00) and the window (opens 13:00) was told 18:00,
+which lands in the 17:00-21:30 dead zone. Since `DEFER`'s entire justification is
+that the time it carries is actionable, this broke the module's central claim. It
+now re-adjudicates until the candidate stops moving; that case takes three hops.
+
+**The retry cap counted nudges as debit presentations.** `Ledger.attempts`
+increments on every action, so three SMS nudges exhausted the NPCI *presentation*
+cap - and the denial was stamped REGULATORY, telling a merchant a regulator
+forbade a debit that had never been presented. Mislabelling a house effect as law
+is precisely what the Basis split exists to prevent, so this was worse than the
+lost retries. `Request` now carries `debit_attempts` separately.
+
+**`RETRY_ALT_RAIL` was judged on the wrong rail.** It presents on a *different*
+rail by definition, and UPI is first in `ALT_RAILS` for both other rails - so the
+most common hop, eNACH to UPI, escaped NPCI's windows entirely, while UPI to card
+was deferred for a constraint cards do not have. Unsafe one way, lost recovery the
+other.
+
+Also fixed: probes from `permitted_actions` were writing ~11 counterfactual rows
+per step into the audit trail a merchant reads to find out why nothing happened;
+DENY decisions published a reschedule time; `explain()` named only the first of
+two tied deferrals and never mentioned the rule that actually governed;
+`unverified_rules()` returned constant names while claiming to return rule ids, so
+a caller joining it against `binding.rule_id` silently reported zero unverified
+rules; and `ContactCap`/`SpendBudget` could deny the mandatory pre-debit
+notification, which `QuietHours` had been careful to exempt - three sibling rules
+reasoning inconsistently about the same case, now one named set.
+
+Two findings were downgraded rather than fixed. Timezone-aware datetimes crashed
+the window arithmetic; unreachable today since the simulator is naive throughout,
+but `Request` now rejects aware times at the boundary rather than half-handling
+them. And `TerminalStop` being POLICY was called a mislabelling - it is not, but
+the `Basis` docstring overclaimed by saying policy rules are ones a merchant "may
+legitimately configure differently". The label says who owns a rule, not how
+harmless it is to drop.
 
 ## Evaluation splits
 
