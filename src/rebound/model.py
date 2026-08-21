@@ -50,6 +50,17 @@ TARGET_DOWNSTREAM = "episode_recovered"
 TARGET_IMMEDIATE = "succeeded"
 """Did this action collect the money right now. Answers *when*."""
 
+TARGET_REVOKED = "episode_revoked"
+"""Did the customer revoke the mandate. Answers *what it costs to be wrong*.
+
+Predicting recovery is only half of an expected value. The measured baseline
+result is that ``aggressive_contact`` recovers less than a naive ladder while
+pushing revocation from 6.00% to 14.54%, destroying more value than abandoning
+every failed debit — so a sequencer that can price recovery but not revocation
+optimises the exact quantity that produced the worst policy in the table, and
+does it while looking locally correct at every step.
+"""
+
 TARGET = TARGET_DOWNSTREAM
 
 #: Actions that can actually collect money, and therefore the only rows on
@@ -510,11 +521,30 @@ class RecoveryModel:
         left as an implementation detail — "we calibrated" and "we checked
         whether calibrating helped" are different claims.
         """
-        if self.spec_ is None or self.base_ is None:
+        if self.spec_ is None:
+            raise RuntimeError("model is not fitted")
+        return self.predict_proba_prepared(self.spec_.transform(frame))
+
+    def predict_proba_prepared(self, prepared: pd.DataFrame) -> np.ndarray:
+        """Predict from an already-encoded matrix.
+
+        Exists because encoding costs as much as predicting. On a 15-row frame
+        ``spec_.transform`` takes 6.9ms against 6.6ms for the calibrated
+        predict, and the whole path is 14.6ms whether the frame holds 1 row or
+        1,000 — the cost is per *call*, not per row, so it scales with the
+        number of decisions a policy makes rather than with the data.
+
+        Two models with identical specs can therefore share one encoding.
+        ``ActionPricer`` does exactly that, and checks the specs match before
+        it does: feeding a matrix encoded under one spec to a model fitted
+        under another would predict on silently mis-ordered columns and return
+        confident nonsense.
+        """
+        if self.base_ is None:
             raise RuntimeError("model is not fitted")
         if self.calibrated_ is None:
-            return self.predict_proba_uncalibrated(frame)
-        return self.calibrated_.predict_proba(self.spec_.transform(frame))[:, 1]
+            return self.base_.predict_proba(prepared)[:, 1]
+        return self.calibrated_.predict_proba(prepared)[:, 1]
 
     def predict_proba_uncalibrated(self, frame: pd.DataFrame) -> np.ndarray:
         """The raw booster output, for measuring what calibration actually did.
