@@ -98,8 +98,8 @@ def test_precision_at_capacity_beats_the_base_rate_for_a_good_model():
     probs = rng.uniform(0, 1, 5000)
     outcomes = (rng.uniform(size=5000) < probs).astype(int)
     report = classification_report(outcomes, probs, capacity=0.1)
-    assert report.precision_at_10pct > report.base_rate
-    assert report.lift_at_10pct > 1.0
+    assert report.precision_at_capacity > report.base_rate
+    assert report.lift_at_capacity > 1.0
 
 
 def test_probabilities_outside_the_unit_interval_are_rejected():

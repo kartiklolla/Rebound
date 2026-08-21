@@ -49,12 +49,27 @@ class ClassificationReport:
     calibration_intercept: float
     expected_calibration_error: float
     max_calibration_error: float
-    precision_at_10pct: float
-    recall_at_10pct: float
-    lift_at_10pct: float
+    capacity: float
+    """The review capacity the precision/recall/lift figures below are cut at.
+
+    Carried on the report rather than baked into the field names. An earlier
+    version named these ``precision_at_10pct`` while honouring whatever
+    ``capacity`` was passed, so calling it with ``capacity=0.5`` produced a
+    field labelled ``at_10pct`` holding precision at 50%. For a project whose
+    entire thesis is honest metrics that is the purest available own goal.
+    """
+
+    precision_at_capacity: float
+    recall_at_capacity: float
+    lift_at_capacity: float
 
     def to_dict(self) -> dict[str, float]:
         return asdict(self)
+
+    @property
+    def capacity_label(self) -> str:
+        """Human-readable cut, e.g. ``"precision@10%"``. Safe for headers."""
+        return f"{self.capacity:.0%}"
 
 
 def classification_report(
@@ -69,18 +84,15 @@ def classification_report(
     precision and recall at that cut are what an ops lead cares about, where a
     threshold-free aggregate is not.
     """
-    y_true = np.asarray(y_true).astype(float)
-    y_prob = np.asarray(y_prob).astype(float)
+    if not 0.0 < capacity <= 1.0:
+        raise ValueError(
+            f"capacity must be in (0, 1], got {capacity}. Values outside that "
+            f"range silently collapsed to a single case in an earlier version."
+        )
+    if bins < 1:
+        raise ValueError(f"bins must be at least 1, got {bins}")
 
-    if len(y_true) != len(y_prob):
-        raise ValueError("y_true and y_prob differ in length")
-    if len(y_true) == 0:
-        raise ValueError("cannot score an empty set")
-    if not np.isfinite(y_prob).all():
-        raise ValueError("y_prob contains non-finite values")
-    if (y_prob < 0).any() or (y_prob > 1).any():
-        raise ValueError("y_prob contains values outside [0, 1]")
-
+    y_true, y_prob = _validate_probabilities(y_true, y_prob)
     base_rate = float(y_true.mean())
     single_class = len(np.unique(y_true)) < 2
 
@@ -102,10 +114,44 @@ def classification_report(
         calibration_intercept=intercept,
         expected_calibration_error=ece,
         max_calibration_error=mce,
-        precision_at_10pct=precision,
-        recall_at_10pct=recall,
-        lift_at_10pct=precision / base_rate if base_rate > 0 else float("nan"),
+        capacity=capacity,
+        precision_at_capacity=precision,
+        recall_at_capacity=recall,
+        lift_at_capacity=precision / base_rate if base_rate > 0 else float("nan"),
     )
+
+
+def _validate_probabilities(
+    y_true: np.ndarray | pd.Series, y_prob: np.ndarray | pd.Series
+) -> tuple[np.ndarray, np.ndarray]:
+    """Shared input gate for everything that scores probabilities.
+
+    Shared on purpose. ``classification_report`` rejected non-finite values
+    while ``reliability_table`` accepted them and bucketed NaN into the *top*
+    calibration bin — inflating exactly the high-probability bin the policy
+    spends most of its money in, and manufacturing an observed rate for it.
+    Two functions disagreeing about the same input is how a bad number gets
+    quoted from whichever one happened to be called.
+    """
+    y_true = np.asarray(y_true).astype(float)
+    y_prob = np.asarray(y_prob).astype(float)
+
+    if len(y_true) != len(y_prob):
+        raise ValueError(
+            f"y_true and y_prob differ in length: {len(y_true)} vs {len(y_prob)}"
+        )
+    if len(y_true) == 0:
+        raise ValueError("cannot score an empty set")
+    if not np.isfinite(y_prob).all():
+        raise ValueError(
+            "y_prob contains non-finite values (NaN or inf). These do not sort "
+            "or bin meaningfully and would land in the highest-probability bin."
+        )
+    if (y_prob < 0).any() or (y_prob > 1).any():
+        raise ValueError("y_prob contains values outside [0, 1]")
+    if not np.isin(y_true, (0.0, 1.0)).all():
+        raise ValueError("y_true must contain only 0 and 1")
+    return y_true, y_prob
 
 
 def _calibration_line(y_true: np.ndarray, y_prob: np.ndarray) -> tuple[float, float]:
@@ -165,8 +211,9 @@ def reliability_table(
     model can post a respectable ECE while being badly wrong in exactly the
     high-probability bin the policy spends most of its money in.
     """
-    y_true = np.asarray(y_true).astype(float)
-    y_prob = np.asarray(y_prob).astype(float)
+    if bins < 1:
+        raise ValueError(f"bins must be at least 1, got {bins}")
+    y_true, y_prob = _validate_probabilities(y_true, y_prob)
     edges = np.linspace(0.0, 1.0, bins + 1)
     index = np.clip(np.digitize(y_prob, edges[1:-1]), 0, bins - 1)
 
@@ -262,6 +309,16 @@ class PolicyReport:
 
 def policy_comparison(reports: list[PolicyReport]) -> pd.DataFrame:
     """Side-by-side policy table, sorted by the metric that matters."""
+    if not reports:
+        raise ValueError("cannot build a comparison from zero reports")
+    names = [report.policy for report in reports]
+    duplicates = {name for name in names if names.count(name) > 1}
+    if duplicates:
+        raise ValueError(
+            f"duplicate policy names in comparison: {sorted(duplicates)}. "
+            f"Rows would be indistinguishable and the floor lookup in "
+            f"value_preserved() would silently pick whichever came first."
+        )
     frame = pd.DataFrame([report.to_row() for report in reports])
     return frame.sort_values("net_rs_per_1000", ascending=False).reset_index(
         drop=True
@@ -308,7 +365,17 @@ def lift_over_baseline(
     is the part that carries information.
     """
 
+    if baseline.episodes == 0 or candidate.episodes == 0:
+        raise ValueError(
+            "cannot compute lift against a report with zero episodes"
+        )
+
     def relative(new: float, old: float) -> float:
+        # NaN, not an exception. Against the documented floor policy
+        # (`no_recovery`) the recovery rate and attempt count are zero *by
+        # construction*, so two of these four fields are legitimately
+        # undefined — that is a property of the comparison, not a bug, and it
+        # should print as NaN rather than abort the run.
         if old == 0:
             return float("nan")
         return (new - old) / abs(old)

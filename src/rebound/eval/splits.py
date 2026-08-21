@@ -33,15 +33,33 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from enum import StrEnum
 
 import pandas as pd
+
+
+class SplitKind(StrEnum):
+    """What kind of boundary a split draws, and therefore which checks apply.
+
+    A typed field rather than the free-text ``name`` it replaced. The verifier
+    used to decide which integrity checks to run by comparing ``name`` against
+    string literals, so a split named anything unrecognised — ``"whatever"``,
+    or a typo — silently skipped both the temporal and the customer-disjointness
+    check while still reporting as verified.
+
+    That is a bad failure in any function; in one whose documented purpose is
+    being "independent of the splitting code" it defeats the entire point.
+    """
+
+    TIME = "time"
+    CUSTOMER = "customer"
 
 
 @dataclass(frozen=True, slots=True)
 class Split:
     """A train/test partition, with an account of what it cost to make."""
 
-    name: str
+    kind: SplitKind
     train: pd.DataFrame
     test: pd.DataFrame
     question: str
@@ -50,9 +68,13 @@ class Split:
     dropped_rows: int = 0
     dropped_reason: str = ""
 
+    @property
+    def name(self) -> str:
+        return str(self.kind)
+
     def __repr__(self) -> str:
         return (
-            f"Split({self.name!r}, train={len(self.train):,}, "
+            f"Split({self.kind.value!r}, train={len(self.train):,}, "
             f"test={len(self.test):,}, dropped={self.dropped_rows:,})"
         )
 
@@ -102,7 +124,7 @@ def time_split(frame: pd.DataFrame, test_fraction: float = 0.3) -> Split:
     dropped = int(frame["episode_id"].isin(straddling).sum())
 
     return Split(
-        name="time",
+        kind=SplitKind.TIME,
         train=train.reset_index(drop=True),
         test=test.reset_index(drop=True),
         question=(
@@ -145,7 +167,7 @@ def customer_split(
 
     is_test = frame["customer_id"].isin(test_customers)
     return Split(
-        name="customer",
+        kind=SplitKind.CUSTOMER,
         train=frame[~is_test].reset_index(drop=True),
         test=frame[is_test].reset_index(drop=True),
         question=(
@@ -179,18 +201,46 @@ class LeakageError(AssertionError):
     """Raised when a split shares information across the train/test boundary."""
 
 
-def assert_split_is_clean(split: Split) -> None:
+def assert_split_is_clean(split: Split, twin_tolerance: float = 0.01) -> None:
     """Re-derive the split's integrity from the data, not from how it was made.
 
     Deliberately independent of the splitting code. A bug in ``time_split``
     that also lives in its own internal checks would be invisible; this
-    interrogates the resulting frames directly, which is the only version worth
-    trusting.
+    interrogates the resulting frames directly.
+
+    Checks, in order of how badly each one has failed in the past:
+
+    1. Neither side is empty.
+    2. The test side has both outcome classes — otherwise every downstream
+       metric is NaN or degenerate, and the split "passes" while being useless.
+    3. No episode spans the boundary (episode-level label).
+    4. No *feature twin* spans the boundary. Identity checks on
+       ``episode_id``/``customer_id`` are trivially defeated by renaming: an
+       earlier version passed a split built by cloning the test rows with
+       prefixed ids and shifted dates, from which the label could be recovered
+       by an exact feature join at accuracy 1.000. Realistically this is how
+       resampling, augmentation, or a de-duplication bug leaks.
+    5. Kind-specific: temporal ordering for TIME, customer disjointness for
+       CUSTOMER. Dispatched on a typed :class:`SplitKind`, never a free-text
+       name — the string version silently skipped both for any unrecognised
+       value.
     """
     train, test = split.train, split.test
 
     if train.empty or test.empty:
         raise LeakageError(f"{split.name} split produced an empty side")
+
+    if "episode_recovered" not in test.columns:
+        raise LeakageError(
+            f"{split.name} split has no 'episode_recovered' column; the label "
+            f"is missing and nothing downstream can be scored"
+        )
+    if test["episode_recovered"].nunique() < 2:
+        raise LeakageError(
+            f"{split.name} split's test side has a single outcome class. Every "
+            f"discrimination metric would be NaN while the split still looked "
+            f"valid."
+        )
 
     shared_episodes = set(train["episode_id"]) & set(test["episode_id"])
     if shared_episodes:
@@ -200,7 +250,9 @@ def assert_split_is_clean(split: Split) -> None:
             f"test rows' answer is readable directly from the train rows."
         )
 
-    if split.name == "customer":
+    _assert_no_feature_twins(split, twin_tolerance)
+
+    if split.kind is SplitKind.CUSTOMER:
         shared_customers = set(train["customer_id"]) & set(test["customer_id"])
         if shared_customers:
             raise LeakageError(
@@ -208,7 +260,7 @@ def assert_split_is_clean(split: Split) -> None:
                 f"whole point is that the test set is people never seen before"
             )
 
-    if split.name == "time":
+    if split.kind is SplitKind.TIME:
         latest_train = train["decided_at"].max()
         earliest_test = test["failed_at"].min()
         if latest_train >= earliest_test:
@@ -216,6 +268,57 @@ def assert_split_is_clean(split: Split) -> None:
                 f"time split overlaps: last training decision at {latest_train} "
                 f"is not before the first test failure at {earliest_test}"
             )
+
+
+#: Columns compared when looking for duplicated rows across the boundary.
+#:
+#: Deliberately excludes identifiers and timestamps — those are exactly what a
+#: cloned row has had rewritten. What survives cloning is the feature content,
+#: so that is what gets hashed.
+_TWIN_COLUMNS: tuple[str, ...] = (
+    "failure_code",
+    "rail",
+    "amount_paise",
+    "ceiling_paise",
+    "billing_day",
+    "cycles_elapsed",
+    "decision_index",
+    "action",
+    "prior_attempts",
+    "prior_contacts",
+    "cust_prior_failures",
+    "cust_prior_recoveries",
+    "cust_prior_mean_failure_day",
+)
+
+
+def _assert_no_feature_twins(split: Split, tolerance: float) -> None:
+    """Fail if too many test rows have an exact feature duplicate in train.
+
+    A small overlap is expected and harmless — with discrete features, some
+    rows genuinely coincide. A large one means rows were copied, and the label
+    can be looked up rather than predicted.
+    """
+    columns = [c for c in _TWIN_COLUMNS if c in split.train.columns]
+    if not columns:
+        return
+
+    def fingerprint(frame: pd.DataFrame) -> pd.Series:
+        return frame[columns].astype(str).agg("|".join, axis=1)
+
+    train_prints = set(fingerprint(split.train))
+    test_prints = fingerprint(split.test)
+    twins = int(test_prints.isin(train_prints).sum())
+    share = twins / len(split.test)
+
+    if share > tolerance:
+        raise LeakageError(
+            f"{split.name} split: {twins:,} of {len(split.test):,} test rows "
+            f"({share:.1%}) have an exact feature twin in train, above the "
+            f"{tolerance:.1%} tolerance. Disjoint ids do not make a split "
+            f"clean if the rows were copied — the label can be joined rather "
+            f"than predicted."
+        )
 
 
 def split_report(splits: dict[str, Split]) -> pd.DataFrame:

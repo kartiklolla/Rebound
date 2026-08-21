@@ -14,6 +14,7 @@ import pytest
 from rebound.eval.splits import (
     LeakageError,
     Split,
+    SplitKind,
     all_splits,
     assert_split_is_clean,
     customer_split,
@@ -141,7 +142,7 @@ def test_customer_split_respects_the_requested_fraction(log):
 def test_leakage_verifier_catches_shared_episodes(log):
     """The verifier must actually fail on a bad split. A safety check that
     cannot fail is decoration."""
-    bad = Split(name="custom", train=log, test=log, question="deliberately broken")
+    bad = Split(kind=SplitKind.TIME, train=log, test=log, question="deliberately broken")
     with pytest.raises(LeakageError, match="episodes"):
         assert_split_is_clean(bad)
 
@@ -150,7 +151,7 @@ def test_leakage_verifier_catches_shared_customers(log):
     episodes = log["episode_id"].unique()
     half = set(episodes[: len(episodes) // 2])
     bad = Split(
-        name="customer",
+        kind=SplitKind.CUSTOMER,
         train=log[log["episode_id"].isin(half)],
         test=log[~log["episode_id"].isin(half)],
         question="episodes are disjoint but customers are not",
@@ -161,7 +162,7 @@ def test_leakage_verifier_catches_shared_customers(log):
 
 def test_leakage_verifier_catches_an_empty_side(log):
     bad = Split(
-        name="time", train=log, test=log.iloc[0:0], question="empty test side"
+        kind=SplitKind.TIME, train=log, test=log.iloc[0:0], question="empty"
     )
     with pytest.raises(LeakageError, match="empty"):
         assert_split_is_clean(bad)

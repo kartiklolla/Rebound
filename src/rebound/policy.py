@@ -12,7 +12,7 @@ import datetime as dt
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from rebound.sim.world import Episode
+from rebound.sim.world import EpisodeView
 from rebound.taxonomy import Action
 
 
@@ -39,11 +39,17 @@ class Policy(ABC):
     @abstractmethod
     def decide(
         self,
-        episode: Episode,
+        episode: EpisodeView,
         now: dt.datetime,
         deadline: dt.datetime,
     ) -> Decision | None:
         """Next action for this episode, or ``None`` to stop working it.
+
+        ``episode`` is a frozen :class:`~rebound.sim.world.EpisodeView`, not the
+        live episode. A policy cannot mutate the run it is participating in, and
+        cannot see the simulator's customer latents. Both were reachable through
+        the live object and both were exploited during red-teaming; see
+        ``docs/SECURITY_REVIEW.md``.
 
         ``now`` is the time of the last event; ``deadline`` is when the
         recovery window closes and the next billing cycle takes over.

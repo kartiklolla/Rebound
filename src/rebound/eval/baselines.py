@@ -22,7 +22,7 @@ import datetime as dt
 
 from rebound.policy import Decision, Policy
 from rebound.sim.params import MAX_RETRIES_PER_CYCLE, PRE_DEBIT_NOTIFICATION_HOURS
-from rebound.sim.world import Episode, within_upi_execution_window
+from rebound.sim.world import EpisodeView, within_upi_execution_window
 from rebound.taxonomy import Action, Disposition, Rail, get_mode
 
 
@@ -70,13 +70,13 @@ class FixedLadder(Policy):
         self.delays_days = delays_days
 
     def decide(self, episode, now, deadline):
-        step = episode.ledger.attempts
+        step = episode.attempts
         if step >= len(self.delays_days):
             return None
         at = episode.failed_at + dt.timedelta(days=self.delays_days[step])
         if at <= now:
             at = now + dt.timedelta(hours=1)
-        if episode.mandate.rail is Rail.UPI_AUTOPAY:
+        if episode.rail is Rail.UPI_AUTOPAY:
             at = _next_upi_window(at)
         if at > deadline:
             return None
@@ -104,17 +104,17 @@ class ImmediateRetry(Policy):
         self.max_attempts = max_attempts
 
     def decide(self, episode, now, deadline):
-        if episode.ledger.attempts >= self.max_attempts:
+        if episode.attempts >= self.max_attempts:
             return None
         at = now + dt.timedelta(hours=self.gap_hours)
-        if episode.mandate.rail is Rail.UPI_AUTOPAY:
+        if episode.rail is Rail.UPI_AUTOPAY:
             at = _next_upi_window(at)
         if at > deadline:
             return None
         return Decision(
             action=Action.RETRY_SAME_RAIL,
             at=at,
-            reason=f"immediate retry {episode.ledger.attempts + 1}",
+            reason=f"immediate retry {episode.attempts + 1}",
         )
 
 
@@ -141,12 +141,12 @@ class AggressiveContact(Policy):
     )
 
     def decide(self, episode, now, deadline):
-        step = len(episode.history)
+        step = episode.steps_taken
         if step >= len(self._LADDER):
             return None
         action = self._LADDER[step]
         at = now + dt.timedelta(days=1)
-        if action is Action.RETRY_SAME_RAIL and episode.mandate.rail is Rail.UPI_AUTOPAY:
+        if action is Action.RETRY_SAME_RAIL and episode.rail is Rail.UPI_AUTOPAY:
             at = _next_upi_window(at)
         if at > deadline:
             return None
@@ -182,7 +182,7 @@ class DispositionAwareRules(Policy):
         self.max_steps = max_steps
 
     def decide(self, episode, now, deadline):
-        if len(episode.history) >= self.max_steps:
+        if episode.steps_taken >= self.max_steps:
             return None
 
         mode = get_mode(episode.failure_code)
@@ -203,7 +203,7 @@ class DispositionAwareRules(Policy):
         return decision
 
     def _decide_by_disposition(
-        self, episode: Episode, now: dt.datetime, disposition: Disposition
+        self, episode: EpisodeView, now: dt.datetime, disposition: Disposition
     ) -> Decision | None:
         if disposition is Disposition.MERCHANT_FIX:
             return self._merchant_fix(episode, now)
@@ -215,7 +215,7 @@ class DispositionAwareRules(Policy):
             return self._mandate_repair(episode, now)
         return self._retry_timing(episode, now)
 
-    def _merchant_fix(self, episode: Episode, now: dt.datetime) -> Decision | None:
+    def _merchant_fix(self, episode: EpisodeView, now: dt.datetime) -> Decision | None:
         if episode.notification_sent_at is None:
             return Decision(
                 action=Action.SEND_PRE_DEBIT_NOTIFICATION,
@@ -226,7 +226,7 @@ class DispositionAwareRules(Policy):
             hours=PRE_DEBIT_NOTIFICATION_HOURS + 1
         )
         at = max(now, ready)
-        if episode.mandate.rail is Rail.UPI_AUTOPAY:
+        if episode.rail is Rail.UPI_AUTOPAY:
             at = _next_upi_window(at)
         return Decision(
             action=Action.RETRY_SAME_RAIL,
@@ -234,11 +234,11 @@ class DispositionAwareRules(Policy):
             reason="notification window elapsed; re-present",
         )
 
-    def _transient(self, episode: Episode, now: dt.datetime) -> Decision | None:
-        if episode.ledger.attempts >= 2:
+    def _transient(self, episode: EpisodeView, now: dt.datetime) -> Decision | None:
+        if episode.attempts >= 2:
             return None
         at = now + dt.timedelta(hours=12)
-        if episode.mandate.rail is Rail.UPI_AUTOPAY:
+        if episode.rail is Rail.UPI_AUTOPAY:
             at = _next_upi_window(at)
         return Decision(
             action=Action.RETRY_SAME_RAIL,
@@ -246,7 +246,7 @@ class DispositionAwareRules(Policy):
             reason="upstream outage; wait it out and re-present",
         )
 
-    def _customer_action(self, episode: Episode, now: dt.datetime) -> Decision | None:
+    def _customer_action(self, episode: EpisodeView, now: dt.datetime) -> Decision | None:
         if not episode.customer_unblocked:
             if episode.contacts_made >= 2:
                 return Decision(
@@ -265,7 +265,7 @@ class DispositionAwareRules(Policy):
                 reason="only the customer can clear this; retrying cannot help",
             )
         at = now + dt.timedelta(hours=6)
-        if episode.mandate.rail is Rail.UPI_AUTOPAY:
+        if episode.rail is Rail.UPI_AUTOPAY:
             at = _next_upi_window(at)
         return Decision(
             action=Action.RETRY_SAME_RAIL,
@@ -273,7 +273,7 @@ class DispositionAwareRules(Policy):
             reason="customer responded; re-present",
         )
 
-    def _mandate_repair(self, episode: Episode, now: dt.datetime) -> Decision | None:
+    def _mandate_repair(self, episode: EpisodeView, now: dt.datetime) -> Decision | None:
         if episode.contacts_made >= 2:
             return Decision(
                 action=Action.STOP,
@@ -292,14 +292,14 @@ class DispositionAwareRules(Policy):
             reason="restore the mandate so future cycles do not fail identically",
         )
 
-    def _retry_timing(self, episode: Episode, now: dt.datetime) -> Decision | None:
+    def _retry_timing(self, episode: EpisodeView, now: dt.datetime) -> Decision | None:
         """Insufficient funds: aim at the start of the month, not a fixed delay.
 
         A single population-level rule, because a rule cannot know that this
         particular customer is paid on the 22nd. That limitation is exactly
         where a learned model should earn its place.
         """
-        if episode.ledger.attempts >= 2:
+        if episode.attempts >= 2:
             if episode.contacts_made == 0:
                 return Decision(
                     action=Action.NUDGE_SMS,
@@ -309,7 +309,7 @@ class DispositionAwareRules(Policy):
             return None
 
         at = _start_of_next_month(now) if now.day > 7 else now + dt.timedelta(days=2)
-        if episode.mandate.rail is Rail.UPI_AUTOPAY:
+        if episode.rail is Rail.UPI_AUTOPAY:
             at = _next_upi_window(at)
         return Decision(
             action=Action.RETRY_SAME_RAIL,

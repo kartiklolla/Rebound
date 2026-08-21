@@ -398,6 +398,65 @@ FORBIDDEN_COLUMNS: frozenset[str] = frozenset(
     }
 )
 
+#: Columns that identify a row rather than describe it.
+#:
+#: Useful for grouping and splitting, never as model input — a customer id is a
+#: perfect memorisation handle and nothing else.
+IDENTIFIER_COLUMNS: frozenset[str] = frozenset(
+    {"episode_id", "customer_id", "mandate_id", "failed_at", "decided_at"}
+)
+
+#: The label, and everything computed from the episode's outcome.
+#:
+#: This set is the fix for the most dangerous gap found in review, and it was
+#: not an attack — it was the mistake about to be made in good faith.
+#:
+#: ``FORBIDDEN_COLUMNS`` guards the *simulator's* latents, so the natural way to
+#: build a feature matrix is ``df.drop(columns=[label] + list(FORBIDDEN_COLUMNS))``.
+#: That leaves ``episode_net_paise`` in — and it predicts ``episode_recovered``
+#: at accuracy **1.000** against a base rate of 0.269, because it *is* the label
+#: arithmetically restated. Also leaking: ``recovered_paise`` (0.833),
+#: ``succeeded`` (0.833), ``episode_steps`` (0.790), ``episode_spent_paise``
+#: (0.743). The result would have been a model with a near-perfect held-out
+#: score and no predictive content whatsoever.
+OUTCOME_COLUMNS: frozenset[str] = frozenset(
+    {
+        "succeeded",
+        "revoked",
+        "recovered_paise",
+        "cost_paise",
+        "episode_recovered",
+        "episode_revoked",
+        "episode_stopped",
+        "episode_steps",
+        "episode_net_paise",
+        "episode_spent_paise",
+        "episode_destroyed_paise",
+        "steps_remaining",
+    }
+)
+
+#: Behavioural-policy metadata: real, but not a feature.
+#:
+#: Propensity describes how the *historical* policy chose, which a deployed
+#: model would never have at decision time.
+METADATA_COLUMNS: frozenset[str] = frozenset({"propensity"})
+
+
+def feature_columns(frame: pd.DataFrame) -> list[str]:
+    """The columns a model may legitimately train on.
+
+    An **allowlist by subtraction**: everything that is not an identifier, an
+    outcome, behavioural metadata, or a latent. Deliberately not a denylist —
+    a denylist fails open, so the day someone adds a column and forgets to
+    blacklist it, it silently becomes a feature. This fails closed: a new
+    column must be classified before it can be used.
+    """
+    excluded = (
+        IDENTIFIER_COLUMNS | OUTCOME_COLUMNS | METADATA_COLUMNS | FORBIDDEN_COLUMNS
+    )
+    return [column for column in frame.columns if column not in excluded]
+
 
 def _observable_features(
     episode: Episode,

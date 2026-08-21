@@ -124,8 +124,36 @@ def revocation_cost_paise(
     Undiscounted on purpose. A discount rate would be a second assumption
     layered on the horizon assumption, and it moves the answer far less than
     the horizon does.
+
+    Raises on a non-positive amount rather than returning a negative cost. A
+    single negative amount — one bad row in a merchant's export — otherwise
+    propagates into ``destroyed_paise`` as a *credit*, which flips every
+    policy's net positive and reports the do-nothing floor as having earned
+    money. Found by red-teaming; see docs/SECURITY_REVIEW.md.
     """
+    if cycle_amount_paise <= 0:
+        raise ValueError(
+            f"cycle_amount_paise must be positive, got {cycle_amount_paise}. "
+            f"A non-positive amount turns destroyed value into a credit and "
+            f"silently inverts every reported net."
+        )
     return cycle_amount_paise * max(0, horizon)
+
+
+def _reject_negative(kind: str, paise: int) -> None:
+    """Guard every ledger entry against negative money.
+
+    A negative cost is a rebate, a negative recovery is a refund, and a
+    negative destruction is value created out of nothing. None of them are
+    things this system can legitimately book, and all three silently improve
+    whatever total they land in — which makes them the highest-leverage way to
+    make the reported numbers lie.
+    """
+    if paise < 0:
+        raise ValueError(
+            f"{kind} must be non-negative, got {paise}. Negative entries "
+            f"improve the totals they land in and cannot be legitimate here."
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +182,7 @@ class Ledger:
         evaluation, and inflates it *most* for the policies that correctly give
         up early, which is exactly backwards.
         """
+        _reject_negative("cost", paise)
         return Ledger(
             recovered_paise=self.recovered_paise,
             spent_paise=self.spent_paise + paise,
@@ -162,6 +191,7 @@ class Ledger:
         )
 
     def plus_recovery(self, paise: int) -> Ledger:
+        _reject_negative("recovery", paise)
         return Ledger(
             recovered_paise=self.recovered_paise + paise,
             spent_paise=self.spent_paise,
@@ -170,6 +200,7 @@ class Ledger:
         )
 
     def plus_destruction(self, paise: int) -> Ledger:
+        _reject_negative("destruction", paise)
         return Ledger(
             recovered_paise=self.recovered_paise,
             spent_paise=self.spent_paise,

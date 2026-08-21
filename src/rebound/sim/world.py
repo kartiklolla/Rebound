@@ -88,6 +88,11 @@ _REPAIR_ACTIONS: frozenset[Action] = frozenset(
     {Action.REQUEST_REMANDATE, Action.REQUEST_MANDATE_AMENDMENT}
 )
 
+#: Every action that reaches the customer and therefore counts against contact
+#: fatigue and revocation risk. Exported so the rollout can rebuild the contact
+#: count from its own event record instead of trusting a counter on the episode.
+CONTACT_ACTIONS: frozenset[Action] = NUDGE_ACTIONS | _REPAIR_ACTIONS
+
 
 # ==========================================================================
 # Entities
@@ -120,6 +125,26 @@ class Mandate:
     billing_day: int
     registered_on: dt.date
     valid_until: dt.date
+
+    def __post_init__(self) -> None:
+        # Validated at construction because a bad amount does not fail loudly
+        # downstream — it flows into destroyed value as a credit and inverts
+        # every reported net without raising anything.
+        if self.cycle_amount_paise <= 0:
+            raise ValueError(
+                f"cycle_amount_paise must be positive, got "
+                f"{self.cycle_amount_paise} for {self.mandate_id}"
+            )
+        if self.ceiling_paise < 0:
+            raise ValueError(
+                f"ceiling_paise cannot be negative, got {self.ceiling_paise} "
+                f"for {self.mandate_id}"
+            )
+        if not 1 <= self.billing_day <= 28:
+            raise ValueError(
+                f"billing_day must be 1-28 (28 so every month has one), got "
+                f"{self.billing_day} for {self.mandate_id}"
+            )
 
 
 @dataclass(slots=True)
@@ -159,6 +184,96 @@ class Episode:
     @property
     def disposition(self) -> Disposition:
         return disposition_of(self.failure_code)
+
+    def view(self) -> EpisodeView:
+        """The read-only projection handed to policies.
+
+        Everything a policy is entitled to know, and nothing it could use to
+        forge a result or read the simulator's latents. See ``EpisodeView``.
+        """
+        mode = get_mode(self.failure_code)
+        return EpisodeView(
+            episode_id=self.episode_id,
+            customer_id=self.customer.customer_id,
+            bank=self.customer.bank,
+            rail=self.mandate.rail,
+            failure_code=self.failure_code,
+            disposition=mode.disposition,
+            mandate_alive=mode.mandate_alive,
+            needs_customer_action=mode.needs_customer_action,
+            mandate_id=self.mandate.mandate_id,
+            cycle_amount_paise=self.mandate.cycle_amount_paise,
+            ceiling_paise=self.mandate.ceiling_paise,
+            billing_day=self.mandate.billing_day,
+            registered_on=self.mandate.registered_on,
+            valid_until=self.mandate.valid_until,
+            failed_at=self.failed_at,
+            cycles_elapsed=self.cycles_elapsed,
+            attempts=self.ledger.attempts,
+            contacts_made=self.contacts_made,
+            spent_paise=self.ledger.spent_paise,
+            notification_sent_at=self.notification_sent_at,
+            customer_unblocked=self.customer_unblocked,
+            mandate_repaired=self.mandate_repaired,
+            history=tuple(self.history),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodeView:
+    """The read-only face of an episode, and the only thing a policy ever sees.
+
+    Two separate problems, one object.
+
+    **Tampering.** ``Episode`` is mutable by necessity — it is a running
+    conversation. Handing it to a policy makes every field it exposes a
+    policy-writable input to the final report: set ``resolved``, rebind
+    ``ledger``, rewrite ``failure_code``, reset ``contacts_made`` to dodge the
+    fatigue penalty. All four were demonstrated against an earlier version of
+    this code. Frozen fields were not enough; the object graph had to be cut.
+
+    **Leakage.** ``Episode.customer`` is a full ``Customer``, which carries
+    ``salary_day``, ``balance_health``, ``engagement``, ``churn_intent`` and
+    ``preferred_channel`` — the simulator's answer key. A learned policy handed
+    that object could read churn intent directly and post spectacular numbers
+    that mean nothing. This view exposes an opaque ``customer_id`` and nothing
+    else about the person.
+
+    What is here is what a merchant's own systems would actually know.
+    """
+
+    episode_id: str
+    customer_id: str
+    bank: str
+
+    rail: Rail
+    failure_code: str
+    disposition: Disposition
+    mandate_alive: bool
+    needs_customer_action: bool
+
+    mandate_id: str
+    cycle_amount_paise: int
+    ceiling_paise: int
+    billing_day: int
+    registered_on: dt.date
+    valid_until: dt.date
+
+    failed_at: dt.datetime
+    cycles_elapsed: int
+
+    attempts: int
+    contacts_made: int
+    spent_paise: int
+    notification_sent_at: dt.datetime | None
+    customer_unblocked: bool
+    mandate_repaired: bool
+
+    history: tuple[ActionOutcome, ...]
+
+    @property
+    def steps_taken(self) -> int:
+        return len(self.history)
 
 
 @dataclass(frozen=True, slots=True)
@@ -597,36 +712,39 @@ class World:
         relative_intent = episode.customer.churn_intent / mean_churn_intent
         return float(np.clip(p.passive_revocation_rate * relative_intent, 0.0, 0.9))
 
-    def close_episode(self, episode: Episode) -> bool:
+    def close_episode(self, episode: Episode) -> ActionOutcome | None:
         """Settle an episode once the policy is finished with it.
 
         Resolves passive churn for episodes that ended without recovery. Must
         be called exactly once per episode, by whatever is driving the rollout;
         skipping it would silently remove the cost of giving up.
 
-        Returns whether the customer revoked at close.
+        Returns the settlement outcome, or ``None`` if nothing happened. The
+        caller needs the outcome object rather than a boolean so it can add it
+        to its own independent record of events — the rollout must be able to
+        rebuild the whole episode's economics without reading anything the
+        policy could have touched.
         """
         if episode.resolved or episode.revoked:
-            return False
+            return None
         if self.rng.random() >= self.passive_revocation_hazard(episode):
-            return False
+            return None
 
         destroyed = revocation_cost_paise(episode.mandate.cycle_amount_paise)
         episode.revoked = True
         episode.ledger = episode.ledger.plus_destruction(destroyed)
-        episode.history.append(
-            ActionOutcome(
-                action=Action.STOP,
-                at=episode.failed_at,
-                succeeded=False,
-                recovered_paise=0,
-                cost_paise=0,
-                revoked=True,
-                destroyed_paise=destroyed,
-                detail="customer revoked after the payment went unrecovered",
-            )
+        outcome = ActionOutcome(
+            action=Action.STOP,
+            at=episode.failed_at,
+            succeeded=False,
+            recovered_paise=0,
+            cost_paise=0,
+            revoked=True,
+            destroyed_paise=destroyed,
+            detail="customer revoked after the payment went unrecovered",
         )
-        return True
+        episode.history.append(outcome)
+        return outcome
 
     # -- the step function ------------------------------------------------
 
@@ -895,5 +1013,8 @@ def with_amount(mandate: Mandate, cycle_amount_paise: int) -> Mandate:
 
     Used to model price changes, which is how a healthy mandate crosses its own
     ceiling or the AFA-exempt threshold and starts failing every cycle.
+
+    Validation is inherited from ``Mandate.__post_init__`` — ``replace`` runs
+    it, so a non-positive amount cannot be smuggled in through this door either.
     """
     return replace(mandate, cycle_amount_paise=cycle_amount_paise)
