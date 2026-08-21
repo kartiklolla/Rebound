@@ -17,6 +17,9 @@ artifacts/
 .env.*
 !.env.example
 
+# Working notes, kept outside the repo
+JOURNAL.md
+
 # Editor / OS
 .vscode/
 .idea/
