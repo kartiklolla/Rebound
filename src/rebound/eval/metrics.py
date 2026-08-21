@@ -234,6 +234,59 @@ def reliability_table(
     return table
 
 
+def slice_report(
+    frame: pd.DataFrame,
+    y_true: np.ndarray | pd.Series,
+    y_prob: np.ndarray | pd.Series,
+    by: str,
+    min_rows: int = 50,
+) -> pd.DataFrame:
+    """Scores broken out by a column, rather than one number for everything.
+
+    Every expensive mistake in this project so far was invisible in the
+    aggregate and obvious the moment the output was split by category. A label
+    that scored every nudge at zero, a cost model that made loyal customers free
+    to churn, a world where only merchants caused churn — the totals looked
+    healthy in all three cases.
+
+    So the model gets the same treatment. A respectable overall PR-AUC can hide
+    a model that is excellent on the easy majority slice and worthless on the
+    dispositions where the decisions are actually hard.
+
+    Slices below ``min_rows`` are reported with NaN metrics rather than dropped.
+    Dropping them hides exactly the thin cells where the model is least
+    trustworthy, which is the opposite of what this table is for.
+    """
+    y_true = np.asarray(y_true).astype(float)
+    y_prob = np.asarray(y_prob).astype(float)
+    if len(frame) != len(y_true) or len(frame) != len(y_prob):
+        raise ValueError("frame, y_true and y_prob must be the same length")
+    if by not in frame.columns:
+        raise ValueError(f"{by!r} is not a column of the frame")
+
+    rows = []
+    for value, index in frame.groupby(by, observed=True).groups.items():
+        mask = frame.index.isin(index)
+        truth, probs = y_true[mask], y_prob[mask]
+        n = int(mask.sum())
+        scorable = n >= min_rows and len(np.unique(truth)) > 1
+        rows.append(
+            {
+                by: value,
+                "n": n,
+                "base_rate": float(truth.mean()) if n else np.nan,
+                "mean_predicted": float(probs.mean()) if n else np.nan,
+                "pr_auc": float(average_precision_score(truth, probs))
+                if scorable
+                else np.nan,
+                "roc_auc": float(roc_auc_score(truth, probs)) if scorable else np.nan,
+                "brier": float(brier_score_loss(truth, probs)) if n else np.nan,
+                "thin": n < min_rows,
+            }
+        )
+    return pd.DataFrame(rows).sort_values("n", ascending=False).reset_index(drop=True)
+
+
 # ==========================================================================
 # Claim B — money
 # ==========================================================================
