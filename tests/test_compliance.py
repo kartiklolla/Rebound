@@ -202,14 +202,51 @@ def test_a_debit_without_notice_is_denied_but_immature_notice_is_deferred():
     deferral, because waiting genuinely resolves it.
     """
     rule = PreDebitNotificationRequired()
+    fix = dict(disposition=Disposition.MERCHANT_FIX)
 
-    missing = rule.check(make_request(notification_sent_at=None))
+    missing = rule.check(make_request(notification_sent_at=None, **fix))
     assert missing is not None and missing.verdict is Verdict.DENY
 
     at = dt.datetime(2026, 3, 1, 20, 0)
-    immature = rule.check(make_request(notification_sent_at=NOTICE, at=at))
+    immature = rule.check(make_request(notification_sent_at=NOTICE, at=at, **fix))
     assert immature is not None and immature.verdict is Verdict.DEFER
     assert immature.earliest_allowed_at == NOTICE + dt.timedelta(hours=24)
+
+
+def test_the_notice_rule_binds_the_cycle_not_every_presentation():
+    """A retry of an already-notified debit does not need fresh notice.
+
+    Written the other way first, and it banned every retry in every recovery
+    episode - none carry a notification timestamp - which took the sequencer's
+    recovery rate to 0.0136 against the naive ladder's 0.4561, with
+    `retry_same_rail` never once chosen.
+
+    The rule was corrected on the reading, not on the number: per-presentation
+    notice would require 24 hours' warning before each retry of a debit the
+    customer already knew about, which would make same-day retry impossible for
+    the whole market. `world.py` encodes the same scope independently. The
+    measurement prompted the re-read; it is not what justifies it.
+    """
+    rule = PreDebitNotificationRequired()
+
+    for disposition in (
+        Disposition.RETRY_TIMING,
+        Disposition.RETRY_TRANSIENT,
+        Disposition.CUSTOMER_ACTION,
+    ):
+        assert (
+            rule.check(
+                make_request(notification_sent_at=None, disposition=disposition)
+            )
+            is None
+        ), disposition
+
+    blocked = rule.check(
+        make_request(
+            notification_sent_at=None, disposition=Disposition.MERCHANT_FIX
+        )
+    )
+    assert blocked is not None and blocked.verdict is Verdict.DENY
 
 
 def test_notice_matures_exactly_at_the_boundary():
@@ -217,8 +254,12 @@ def test_notice_matures_exactly_at_the_boundary():
     rule = PreDebitNotificationRequired()
     matures = NOTICE + dt.timedelta(hours=24)
 
-    assert rule.check(make_request(at=matures - dt.timedelta(seconds=1))) is not None
-    assert rule.check(make_request(at=matures)) is None
+    fix = dict(disposition=Disposition.MERCHANT_FIX)
+    assert (
+        rule.check(make_request(at=matures - dt.timedelta(seconds=1), **fix))
+        is not None
+    )
+    assert rule.check(make_request(at=matures, **fix)) is None
 
 
 def test_an_amount_over_the_afa_ceiling_is_denied():
@@ -324,7 +365,12 @@ def test_regulatory_rules_ignore_actions_that_are_not_debits():
     request = make_request(
         action=Action.NUDGE_SMS, attempts=99, debit_attempts=99, mandate_alive=False
     )
-    for rule in (MandateMustBeAlive(), PreDebitNotificationRequired(), AfaCeiling(), RetryCap()):
+    for rule in (
+        MandateMustBeAlive(),
+        PreDebitNotificationRequired(),
+        AfaCeiling(),
+        RetryCap(),
+    ):
         assert rule.check(request) is None, rule.rule_id
 
 
@@ -448,6 +494,7 @@ def test_every_rule_runs_even_after_one_denies():
         debit_attempts=99,
         cycle_amount_paise=20_000_00,
         notification_sent_at=None,
+        disposition=Disposition.MERCHANT_FIX,
     )
     decision = ComplianceGate().adjudicate(request)
     fired = {r.rule_id for r in decision.rulings}
@@ -480,6 +527,7 @@ def test_the_deferral_time_satisfies_every_deferring_rule():
     sent = dt.datetime(2026, 3, 3, 5, 0)
     request = make_request(
         rail=Rail.UPI_AUTOPAY,
+        disposition=Disposition.MERCHANT_FIX,
         notification_sent_at=sent,
         at=dt.datetime(2026, 3, 3, 11, 0),
     )
@@ -514,6 +562,7 @@ def test_a_deferral_lands_on_a_time_the_gate_will_still_honour():
     """
     request = make_request(
         rail=Rail.UPI_AUTOPAY,
+        disposition=Disposition.MERCHANT_FIX,
         notification_sent_at=dt.datetime(2026, 3, 9, 18, 0),
         at=dt.datetime(2026, 3, 10, 11, 0),
     )
@@ -549,6 +598,7 @@ def test_the_explanation_cites_every_rule_at_the_deciding_severity():
     rule sat earlier in the list and never mentioned the other."""
     request = make_request(
         rail=Rail.UPI_AUTOPAY,
+        disposition=Disposition.MERCHANT_FIX,
         notification_sent_at=dt.datetime(2026, 3, 9, 18, 0),
         at=dt.datetime(2026, 3, 10, 11, 0),
     )

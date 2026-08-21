@@ -309,6 +309,30 @@ class PreDebitNotificationRequired:
     Deferred rather than denied when notice has been sent but has not matured,
     and denied when no notice exists at all — because in that case the fix is to
     send one, which is a different action, not a later version of this one.
+
+    Scope: the notice attaches to the **cycle**, not to each presentation
+    within it. A recovery episode exists because a scheduled debit already went
+    out and failed, so the cycle's notice question is settled — unless the
+    failure says otherwise, which is precisely what a ``MERCHANT_FIX``
+    disposition means. ``CARD_PRE_DEBIT_NOTIFICATION_MISSING`` and its siblings
+    are the codes where the notice is the outstanding blocker, and there the
+    rule binds hard.
+
+    **This rule was written wrong first, and the correction needs recording
+    because of how it was found.** The original applied to every debit
+    unconditionally. That banned every retry in every recovery episode — none
+    of them carry a notification timestamp — and the sequencer's recovery rate
+    came out at 0.0136 against the naive ladder's 0.4561, with
+    ``retry_same_rail`` never once selected.
+
+    Loosening a compliance rule because it produced an unflattering number is
+    how compliance logic rots, so the argument has to stand without that
+    result. It does: reading the requirement as per-presentation would mean a
+    merchant must give 24 hours' notice before each retry of a debit the
+    customer was already told about, which would make same-day retry impossible
+    for everyone in the market and is not how the rails behave. The simulator
+    encodes the same reading independently at ``world.py:831``. The measurement
+    is what prompted the re-read; it is not the justification.
     """
 
     hours: int = PRE_DEBIT_NOTIFICATION_HOURS
@@ -318,6 +342,8 @@ class PreDebitNotificationRequired:
 
     def check(self, request: Request) -> Ruling | None:
         if request.action not in DEBIT_ACTIONS:
+            return None
+        if request.disposition is not Disposition.MERCHANT_FIX:
             return None
         sent = request.notification_sent_at
         if sent is None:
