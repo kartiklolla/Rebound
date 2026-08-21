@@ -603,7 +603,7 @@ class World:
         if action in NUDGE_ACTIONS or action in _REPAIR_ACTIONS:
             if self.rng.random() < self.revocation_hazard(episode, action):
                 destroyed = revocation_cost_paise(
-                    episode.mandate.cycle_amount_paise, episode.cycles_elapsed
+                    episode.mandate.cycle_amount_paise
                 )
                 episode.revoked = True
                 episode.contacts_made += 1

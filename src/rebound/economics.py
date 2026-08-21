@@ -83,13 +83,15 @@ CHANNEL_INTRUSIVENESS: dict[Action, float] = {
 }
 
 
-#: Horizon used to value a surviving mandate, in billing cycles.
+#: Expected remaining life of a surviving mandate, in billing cycles.
 #:
 #: A revoked monthly subscription does not cost one cycle's revenue, it costs
 #: every cycle that would have followed. Twelve is a deliberately conservative
 #: stand-in for an indefinite subscription — long enough that revocation
 #: dominates the cost matrix (which is true), short enough that the number is
 #: defensible rather than rhetorical.
+#:
+#: Read as *remaining* life, not total life. See ``revocation_cost_paise``.
 LTV_HORIZON_CYCLES = 12
 
 
@@ -105,22 +107,25 @@ def attempt_cost_paise(action: Action, rail: Rail) -> int:
 
 def revocation_cost_paise(
     cycle_amount_paise: int,
-    cycles_elapsed: int = 0,
     horizon: int = LTV_HORIZON_CYCLES,
 ) -> int:
     """Value destroyed when a mandate is revoked.
 
-    The revenue of every remaining cycle in the horizon, undiscounted. A young
-    mandate is worth more than an old one purely because more of its horizon is
-    still ahead of it — which is why an identical nudge is a worse idea on a
-    new customer than on one already eleven cycles in.
+    The revenue of the cycles that would have followed, undiscounted.
 
-    Undiscounted on purpose. A discount rate here would be a second assumption
+    The horizon is **memoryless**: a mandate's remaining life does not tick
+    down from its registration date. An earlier version of this function
+    computed ``horizon - cycles_elapsed``, which implied that a mandate twelve
+    cycles old had no value left and could be churned for free. That is exactly
+    backwards — a customer who has paid reliably for a year is more likely to
+    keep paying, not less — and a policy optimising against it would learn to
+    aim its riskiest actions at the most loyal customers on the book.
+
+    Undiscounted on purpose. A discount rate would be a second assumption
     layered on the horizon assumption, and it moves the answer far less than
     the horizon does.
     """
-    remaining = max(0, horizon - cycles_elapsed)
-    return cycle_amount_paise * remaining
+    return cycle_amount_paise * max(0, horizon)
 
 
 @dataclass(frozen=True, slots=True)

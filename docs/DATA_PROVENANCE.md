@@ -140,6 +140,30 @@ Two structural defences back this up:
    Cost-if-revoked is the merchant's own business knowledge and the policy may
    use it. Probability-of-revocation is the answer key and must be learned.
 
+## The label, and what it does and does not mean
+
+Each row in the log is one decision point, and carries two labels.
+
+`succeeded` — did **this action** recover the money. Causally clean, and on its own
+badly misleading: a nudge never collects money, it unblocks a customer so that a
+later retry collects. Under this label alone, every nudge, notification and mandate
+repair scores exactly zero.
+
+`episode_recovered` — did the episode **ultimately** recover. This is the return from
+the decision point, and it is what `rebound.model` is trained to predict, because it
+is the quantity a sequencer needs in order to choose between actions.
+
+**The caveat.** That return is realised under the *behavioural* policy — the randomised
+ladder. It answers "what happened when a merchant took this action and then carried on
+behaving like that merchant," not "what would happen under an optimal continuation."
+Those differ, and the difference is a real limitation on Claim B.
+
+Logged propensities are what make it measurable rather than rhetorical. Every row
+records the probability with which the behavioural policy selected that action, and
+`coverage_report()` shows the (disposition × action) cells where the log is thin. In
+those cells, any claim is extrapolation rather than evidence, and they are reported
+alongside the metrics rather than left for a reader to discover.
+
 ## Limitations
 
 Stated plainly, because they are the first things a careful reader will look

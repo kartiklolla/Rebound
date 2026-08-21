@@ -14,8 +14,8 @@
 | 01 | Project scaffold | ✅ done |
 | 02 | Failure taxonomy (domain model) | ✅ done — 27 codes, 3 rails, 144 tests |
 | 03 | World simulator + economics + provenance | ✅ done — 234 tests, rates calibrated to anchors |
-| 04 | Historical dataset (exploration ladder) | 🟡 in progress |
-| 05 | Metric harness + baseline policies | ⬜ not started |
+| 04 | Historical dataset (exploration ladder) | ✅ done — 255 tests, ~53k rows / ~14k episodes |
+| 05 | Metric harness + baselines + **both splits** | 🟡 in progress |
 | 06 | Recovery-probability model + calibration | ⬜ not started |
 | 07 | Compliance gate (non-bypassable) | ⬜ not started |
 | 08 | Sequencer / agent policy | ⬜ not started |
@@ -110,6 +110,39 @@ Enforced mechanically by `test_taxonomy_encodes_no_probabilities`, which fails i
 numeric field is ever added to `FailureMode`. Adding one requires deleting that test:
 a deliberate speed bump, not an obstacle to route around.
 
+### D9 — Rows are labelled with the downstream episode outcome (2026-08-21)
+The obvious label — "did *this* action recover the money" — is causally clean and badly
+wrong. A nudge never collects; it unblocks a customer so a later retry collects. Under
+the direct label every nudge, notification and mandate repair scores exactly 0.000, and
+a model trained on it learns to never contact anyone.
+
+Each decision point therefore carries the *return from that point*: whether the episode
+ultimately recovered. Measured effect of the fix — nudges go from 0.000 immediate to
+0.15 downstream overall, and 0.36–0.39 on insufficient-funds failures.
+
+`succeeded` is retained alongside it. The contrast between immediate and downstream
+effect is precisely what separates a collecting action from an enabling one.
+
+**Caveat carried into the README:** this return is realised under the *behavioural*
+policy. It answers "what happened when a merchant did this and then carried on behaving
+like that merchant," not "what happens under an optimal continuation." Logged
+propensities make the gap measurable rather than rhetorical.
+
+### D10 — Mandate lifetime value is memoryless (2026-08-21)
+`revocation_cost_paise` originally computed `horizon - cycles_elapsed`, implying a
+mandate twelve cycles old had no value left and could be churned for free. Exactly
+backwards: a customer who has paid reliably for a year is *more* likely to keep paying.
+A policy optimising against that would aim its riskiest actions at the most loyal
+customers on the book.
+
+Now a flat expected remaining life, independent of tenure.
+
+### D11 — Recovery is bounded by the billing cycle (2026-08-21)
+Episodes may run at most 28 days. A merchant stops chasing last month's payment when
+this month's comes due. Without the bound, episodes overlapped in wall-clock time,
+which made per-customer history features arrive stale and described a merchant nobody
+would recognise.
+
 ### D6 — Failure rates calibrated empirically, not in closed form (2026-08-21)
 The salary curve decides *who* fails and *when*; it does not produce the right
 *overall* rate on its own. Reconciling them in closed form is tractable but wrong in
@@ -147,19 +180,41 @@ is fatal by design.
 
 ---
 
+## Evaluation splits
+
+Both are built and both are reported. They answer different questions and a model can
+pass one while failing the other.
+
+**Time-based split** — train on an earlier window, test on a strictly later one. Tests
+generalisation *forward in time*, which is the deployment condition: a model trained on
+history and run on next month. Catches temporal leakage and drift. This is the primary
+split for the headline numbers.
+
+**Customer-based split** — disjoint customer sets, whole customers held out. Tests
+generalisation *to people never seen before*, which is the cold-start condition and the
+one that catches a model quietly memorising per-customer history features rather than
+learning transferable structure. Given that `cust_prior_*` features exist specifically
+to let the model infer latent traits, this is the split that keeps them honest.
+
+A gap between the two is informative, not embarrassing: time-split strong and
+customer-split weak means the model is leaning on customer memorisation and will fail on
+new signups.
+
+---
+
 ## Metrics
 
 Filled in as they land. Empty cells are honest — they mean not yet measured.
 
-### Claim A — recovery-probability model (held-out, time-split)
+### Claim A — recovery-probability model
 
-| Metric | Value |
-|--------|-------|
-| PR-AUC | — |
-| ROC-AUC | — |
-| Brier score | — |
-| Calibration slope | — |
-| Baseline (failure-code prior only) PR-AUC | — |
+| Metric | Time split | Customer split |
+|--------|-----------|----------------|
+| PR-AUC | — | — |
+| ROC-AUC | — | — |
+| Brier score | — | — |
+| Calibration slope | — | — |
+| Baseline (failure-code prior only) PR-AUC | — | — |
 
 ### Claim B — policy vs baselines (held-out batch)
 
