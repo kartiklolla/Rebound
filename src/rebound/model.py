@@ -64,6 +64,80 @@ COLLECTING_ACTIONS: frozenset[str] = frozenset(
 )
 
 
+def _split_holdout(
+    frame: pd.DataFrame,
+    *,
+    group_by: str | None,
+    order_by: str | None,
+    fraction: float,
+    seed: int,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Cut a frame into an earlier part and a held-out part, group-atomically.
+
+    Two properties, and the split is worthless without both.
+
+    **No group straddles the cut.** Rows are assigned by group, never
+    individually. An episode with rows on both sides makes its held-out label
+    readable from its training rows.
+
+    **The cut matches the regime.** With ``order_by``, the holdout is the
+    future and groups straddling the boundary are **dropped**. With
+    ``order_by=None``, whole groups are held out at random, which is the
+    cold-start condition, and nothing needs dropping.
+
+    The embargo is not optional and cannot be replaced by cleverer ranking.
+    Rank groups by their first timestamp and a long-running group reaches
+    forward past the boundary; rank by their last and it reaches backward. A
+    group that spans the cut has to go somewhere, and wherever it goes it
+    carries rows from the other side. Measured here: episode-atomic but
+    unembargoed, the two slices shared no episode and still overlapped by 26
+    days of ``decided_at``. Dropping the straddlers is what the outer splitter
+    already does, so this applies the same standard the project enforces on
+    itself elsewhere.
+
+    Falls back to a plain row cut when there is no usable group column or only
+    one group, so a small hand-built test frame still works.
+    """
+    usable = group_by is not None and group_by in frame.columns
+    ordered_by = order_by if order_by and order_by in frame.columns else None
+
+    if usable and frame[group_by].nunique() > 1:
+        grouped = frame.groupby(group_by, observed=True)
+
+        if ordered_by:
+            ends = grouped[ordered_by].max()
+            starts = grouped[ordered_by].min()
+            rank = ends.sort_values()
+            sizes = grouped.size().reindex(rank.index)
+            target = len(frame) * (1.0 - fraction)
+            n_early = min(max(int((sizes.cumsum() <= target).sum()), 1), len(rank) - 1)
+
+            boundary = rank.iloc[n_early - 1]
+            early_groups = set(ends.index[ends <= boundary])
+            late_groups = set(starts.index[starts > boundary])
+
+            keys = frame[group_by]
+            early = frame[keys.isin(early_groups)].sort_values(ordered_by)
+            late = frame[keys.isin(late_groups)].sort_values(ordered_by)
+            if len(early) and len(late):
+                return early, late
+            # Degenerate boundary (every group straddles). Fall through.
+        else:
+            keys_index = pd.Index(frame[group_by].unique())
+            order = np.random.default_rng(seed).permutation(len(keys_index))
+            rank = pd.Series(order, index=keys_index).sort_values()
+            sizes = grouped.size().reindex(rank.index)
+            target = len(frame) * (1.0 - fraction)
+            n_early = min(max(int((sizes.cumsum() <= target).sum()), 1), len(rank) - 1)
+
+            in_early = frame[group_by].isin(set(rank.index[:n_early]))
+            return frame[in_early], frame[~in_early]
+
+    ordered = frame.sort_values(ordered_by) if ordered_by else frame
+    cut = int(len(ordered) * (1.0 - fraction))
+    return ordered.iloc[:cut], ordered.iloc[cut:]
+
+
 def _expected_calibration_error(
     y_true: np.ndarray, y_prob: np.ndarray, bins: int = 10
 ) -> float:
@@ -258,17 +332,52 @@ class RecoveryModel:
         self.base_ = None
         self.fit_rows_ = 0
         self.calibration_rows_ = 0
+        self._order_by: str | None = "decided_at"
+        self._group_by: str | None = "episode_id"
+        self.fit_index_: pd.Index = pd.Index([])
+        self.calibration_index_: pd.Index = pd.Index([])
+        self.selection_index_: pd.Index = pd.Index([])
+        self.dropped_rows_ = 0
 
     def fit(
-        self, frame: pd.DataFrame, order_by: str | None = "failed_at"
+        self,
+        frame: pd.DataFrame,
+        order_by: str | None = "decided_at",
+        group_by: str | None = "episode_id",
     ) -> RecoveryModel:
-        """Fit the booster, then fit a calibrator on a disjoint later slice.
+        """Fit the booster, then fit a calibrator on a disjoint held-out slice.
 
-        ``order_by`` makes the inner split temporal, matching how the model will
-        actually be used: fitted on history, calibrated on the most recent
-        history, run on the future. A random inner split would let the
-        calibrator see the same period the base model trained on, which is the
-        subtle version of calibrating on your own training data.
+        The inner split has to match the **generalisation regime being claimed**,
+        and getting that wrong is not a cosmetic error. This model previously
+        always cut the inner split temporally. Under a time-based outer split
+        that is right. Under a *customer*-based outer split it silently was not:
+        3,533 of 3,712 calibration-slice customers also appeared in the base
+        model's fit slice, so the calibrator was chosen on people the booster had
+        memorised and then applied to strangers. It picked isotonic on a
+        selection score of 0.0074 against 0.0153 for no calibration — and on the
+        held-out test set isotonic was worse on *every* metric, ECE included
+        (0.0102 against 0.0082), costing 0.0131 of PR-AUC. The selection was
+        confident, reproducible, and drawn from the wrong distribution.
+
+        So ``group_by`` and ``order_by`` are now passed by the caller to describe
+        the regime, and both the inner split and the inner-inner selection split
+        respect them:
+
+        - **time split** → ``group_by="episode_id"``, ``order_by="decided_at"``.
+          Fitted on history, calibrated on the most recent history, run on the
+          future.
+        - **customer split** → ``group_by="customer_id"``, ``order_by=None``.
+          The calibrator is selected on customers the booster has never seen,
+          which is the condition it will actually be scored under.
+
+        ``group_by`` also makes the cut **group-atomic**, which the row cut was
+        not. Ordering by ``failed_at`` sorted by episode *start*, so a long
+        episode's later decisions landed on the far side of the cut: the fit and
+        calibration slices shared an episode and overlapped by 27 days of
+        ``decided_at``. Small in effect, but it meant the inner split failed the
+        very cleanliness rule ``assert_split_is_clean`` enforces on the outer
+        one. Groups are now ranked by their *last* timestamp, so a group cannot
+        reach across its own boundary.
         """
         if self.target not in frame.columns:
             raise ValueError(f"frame has no {self.target!r} column")
@@ -278,9 +387,15 @@ class RecoveryModel:
                 f"to learn and every metric would be undefined"
             )
 
-        ordered = frame.sort_values(order_by) if order_by else frame
-        cut = int(len(ordered) * (1.0 - self.calibration_fraction))
-        fit_part, calibration_part = ordered.iloc[:cut], ordered.iloc[cut:]
+        self._order_by = order_by
+        self._group_by = group_by
+        fit_part, calibration_part = _split_holdout(
+            frame,
+            group_by=group_by,
+            order_by=order_by,
+            fraction=self.calibration_fraction,
+            seed=self.seed,
+        )
 
         if calibration_part[self.target].nunique() < 2:
             raise ValueError(
@@ -291,6 +406,16 @@ class RecoveryModel:
         self.spec_ = FeatureSpec.fit(fit_part)
         self.fit_rows_ = len(fit_part)
         self.calibration_rows_ = len(calibration_part)
+        # Record the actual partition, not the recipe for it. The tests that
+        # check disjointness previously re-derived the slices with the same
+        # arithmetic the model used, so they asserted that a sorted column was
+        # sorted and passed while the real slices shared an episode. Reporting
+        # the row labels lets a test look up what was really fitted on.
+        self.fit_index_ = fit_part.index
+        self.calibration_index_ = calibration_part.index
+        # Episodes straddling the inner boundary are embargoed, so the two
+        # slices need not account for every row. Reported rather than silent.
+        self.dropped_rows_ = len(frame) - len(fit_part) - len(calibration_part)
 
         self.base_ = HistGradientBoostingClassifier(**self.params)
         self.base_.fit(
@@ -331,11 +456,14 @@ class RecoveryModel:
             ).fit(self.spec_.transform(calibration_part), y)
             return
 
-        half = len(calibration_part) // 2
-        inner_fit, inner_eval = (
-            calibration_part.iloc[:half],
-            calibration_part.iloc[half:],
+        inner_fit, inner_eval = _split_holdout(
+            calibration_part,
+            group_by=self._group_by,
+            order_by=self._order_by,
+            fraction=0.5,
+            seed=self.seed + 1,
         )
+        self.selection_index_ = inner_eval.index
         eval_y = inner_eval[self.target].astype(int).to_numpy()
 
         candidates: dict[str, float] = {
@@ -492,7 +620,18 @@ class TwoHeadedModel:
         """Rows where an immediate-success label carries information."""
         return frame[frame["action"].isin(COLLECTING_ACTIONS)]
 
-    def fit(self, frame: pd.DataFrame, order_by: str | None = "failed_at"):
+    def fit(
+        self,
+        frame: pd.DataFrame,
+        order_by: str | None = "decided_at",
+        group_by: str | None = "episode_id",
+    ):
+        """Fit both heads under the same generalisation regime.
+
+        ``order_by``/``group_by`` are forwarded unchanged: whichever regime the
+        outer split is testing, both heads must have their calibrators selected
+        under it. See ``RecoveryModel.fit`` for why a mismatch is not cosmetic.
+        """
         collecting = self.collecting_rows(frame)
         if len(collecting) < 200:
             raise ValueError(
@@ -500,8 +639,8 @@ class TwoHeadedModel:
                 f"head has nothing to learn from"
             )
         self.immediate_rows_ = len(collecting)
-        self.immediate.fit(collecting, order_by=order_by)
-        self.downstream.fit(frame, order_by=order_by)
+        self.immediate.fit(collecting, order_by=order_by, group_by=group_by)
+        self.downstream.fit(frame, order_by=order_by, group_by=group_by)
         return self
 
     def predict_immediate(self, frame: pd.DataFrame) -> np.ndarray:

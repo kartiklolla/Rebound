@@ -10,11 +10,26 @@ temporal leakage and drift.
 
 **Customer split.** Whole customers held out, disjoint sets. This is the
 cold-start condition, and it is the split that matters most given how this
-dataset is built. The ``cust_prior_*`` features exist specifically so the model
-can infer latent traits from a customer's own history; that is exactly the
-mechanism by which it could instead memorise individual customers. A model that
-is strong on the time split and weak on the customer split has learned people
-rather than structure, and will fail on every new signup.
+dataset is built. A model that is strong on the time split and weak on the
+customer split has learned people rather than structure, and will fail on every
+new signup.
+
+The obvious suspect is the ``cust_prior_*`` block, which exists so the model can
+infer latent traits from a customer's own history. It is not the real one.
+Excluding ``customer_id`` from the features does **not** remove the ability to
+identify a customer: every customer here holds exactly one mandate, and the
+tuple ``(bank, billing_day, amount_paise, ceiling_paise, rail)`` is constant per
+customer and unique across all 5,974 of them. It is a perfect fingerprint
+assembled from five individually legitimate features, and no allowlist can
+exclude it without discarding the features themselves.
+
+Measured, a model given only those five columns scores ROC 0.6290 on the time
+split and 0.5399 on the customer split. Genuine structure would score alike on
+both; the 0.089 excess is per-customer memorisation. It is small against the
+full model's 0.9137, and the customer split — which is immune to it — scores the
+higher PR-AUC, so memorisation is not what the model is running on. But the
+number is not zero, and the reason to run the customer split is that it is the
+only measurement that charges for it.
 
 A gap between the two is a finding, not an embarrassment. It is reported.
 
@@ -282,9 +297,8 @@ _TWIN_COLUMNS: tuple[str, ...] = (
     "ceiling_paise",
     "billing_day",
     "cycles_elapsed",
-    "decision_index",
     "action",
-    "prior_attempts",
+    "prior_actions",
     "prior_contacts",
     "cust_prior_failures",
     "cust_prior_recoveries",

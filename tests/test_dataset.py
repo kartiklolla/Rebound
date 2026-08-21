@@ -16,6 +16,7 @@ from rebound.sim.dataset import (
     FORBIDDEN_COLUMNS,
     GenerationConfig,
     coverage_report,
+    feature_columns,
     generate_log,
 )
 from rebound.taxonomy import Action
@@ -47,6 +48,35 @@ def test_no_latent_columns_reach_the_log(log):
     """
     leaked = FORBIDDEN_COLUMNS & set(log.columns)
     assert not leaked, f"latent columns leaked into the log: {leaked}"
+
+
+def test_no_two_features_are_identical(log):
+    """Two features carrying the same values are not merely redundant.
+
+    ``decision_index`` and ``prior_attempts`` were byte-identical in all
+    162,743 rows — the ledger increments its counter on every action, and the
+    one exemption (``STOP``) ends the episode on the step it is recorded, so no
+    row ever observed a non-incremented counter. Both were selectable features.
+
+    The damage was to the reported importances. Permutation importance shuffles
+    one column at a time; with a twin intact the model reads the signal off the
+    twin, so the shared signal measures as near-noise in *both* and the
+    published ranking understates it. ``decision_index`` was reported at 0.039
+    as though it were a distinct signal, and its twin was never mentioned.
+
+    Cheap to check, and it fails closed on any future duplicate.
+    """
+    columns = feature_columns(log)
+    duplicates = [
+        (a, b)
+        for i, a in enumerate(columns)
+        for b in columns[i + 1 :]
+        if log[a].equals(log[b])
+    ]
+    assert not duplicates, (
+        f"identical feature columns: {duplicates}. They split each other's "
+        f"permutation importance and make the reported ranking wrong."
+    )
 
 
 def test_customer_history_is_strictly_backward_looking(log):

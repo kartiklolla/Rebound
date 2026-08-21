@@ -425,8 +425,39 @@ FORBIDDEN_COLUMNS: frozenset[str] = frozenset(
 #:
 #: Useful for grouping and splitting, never as model input — a customer id is a
 #: perfect memorisation handle and nothing else.
+#: Identifiers: used for grouping, ordering and splitting, never as features.
+#:
+#: ``decision_index`` is here because of a bug worth recording. It was written
+#: as an identifier and *commented* as one at its construction site, but was
+#: never added to this set, so the allowlist let it through as a feature — and
+#: it was byte-identical to ``prior_attempts`` in all 162,743 rows, because
+#: ``Ledger.plus_cost`` increments ``attempts`` on every action and the only
+#: exemption (``STOP``) terminates the episode on the same step it is recorded.
+#:
+#: Two identical features are not merely redundant. They mask each other under
+#: permutation importance: permuting one leaves its twin intact, so the model
+#: reads the signal off the twin and the shared signal measures as noise in
+#: both. The published table listed ``decision_index`` at 0.039 as though it
+#: were a distinct signal and never mentioned its twin at all.
+#:
+#: The measured cost was smaller than that reasoning predicts. Merged into a
+#: single ``prior_actions``, it scores 0.0396 — against 0.0428 for one twin
+#: before the merge. Masking was real but slight, presumably because the
+#: booster had other correlated columns to fall back on either way. Recorded
+#: here because the prediction was made before the measurement and the
+#: measurement did not agree with it; the fix is still right on its own terms,
+#: but the harm it undid was mostly to the honesty of the ranking rather than
+#: to the model. ``test_no_two_features_are_identical`` fails the build on any
+#: recurrence.
 IDENTIFIER_COLUMNS: frozenset[str] = frozenset(
-    {"episode_id", "customer_id", "mandate_id", "failed_at", "decided_at"}
+    {
+        "episode_id",
+        "decision_index",
+        "customer_id",
+        "mandate_id",
+        "failed_at",
+        "decided_at",
+    }
 )
 
 #: The label, and everything computed from the episode's outcome.
@@ -531,7 +562,10 @@ def _observable_features(
         "decision_weekday": at.weekday(),
         "within_upi_window": within_upi_execution_window(at),
         # -- episode state so far -------------------------------------------
-        "prior_attempts": episode.ledger.attempts,
+        # Named for what it counts. The ledger increments on every action, so
+        # an SMS nudge and a debit retry both land here; calling it
+        # "prior_attempts" implied a debit count it never held.
+        "prior_actions": episode.ledger.attempts,
         "prior_contacts": episode.contacts_made,
         "notification_sent": episode.notification_sent_at is not None,
         "customer_unblocked": episode.customer_unblocked,

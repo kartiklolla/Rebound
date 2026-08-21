@@ -127,15 +127,72 @@ def test_predictions_are_probabilities(fitted, split):
 def test_calibration_slice_is_disjoint_and_later(split):
     """Calibrating on data the base model already fitted produces a model that
     looks beautifully calibrated in-sample and is overconfident on everything
-    else — the exact failure calibration exists to prevent."""
-    model = RecoveryModel(max_iter=60, calibration_fraction=0.25).fit(split.train)
-    assert model.fit_rows_ + model.calibration_rows_ == len(split.train)
-    assert model.calibration_rows_ == pytest.approx(len(split.train) * 0.25, rel=0.02)
+    else — the exact failure calibration exists to prevent.
 
-    ordered = split.train.sort_values("failed_at")
-    boundary = ordered.iloc[model.fit_rows_ - 1]["failed_at"]
-    calibration_start = ordered.iloc[model.fit_rows_]["failed_at"]
-    assert calibration_start >= boundary
+    This test used to be worthless. It re-sorted the frame by ``failed_at`` and
+    asserted that the row after the cut was not earlier than the row before it
+    — that is, it asserted a sorted column was sorted, which holds at every
+    index regardless of what the model did. It passed while the two slices
+    shared an episode and overlapped by 27 days of ``decided_at``.
+
+    It now looks up the rows the model actually fitted on.
+    """
+    model = RecoveryModel(max_iter=60, calibration_fraction=0.25).fit(split.train)
+    assert (
+        model.fit_rows_ + model.calibration_rows_ + model.dropped_rows_
+        == len(split.train)
+    )
+    assert model.dropped_rows_ < len(split.train) * 0.15, (
+        f"the embargo dropped {model.dropped_rows_} of {len(split.train)} rows; "
+        f"a clean boundary is not worth that much of the training set"
+    )
+    # Not an exact share any more: the embargo removes straddling episodes from
+    # both sides, so calibration_fraction is a target rather than a guarantee.
+    # A band is the honest assertion — the point of the test is disjointness.
+    share = model.calibration_rows_ / len(split.train)
+    assert 0.15 < share < 0.30, f"calibration slice is {share:.1%} of train"
+
+    fit_part = split.train.loc[model.fit_index_]
+    calibration_part = split.train.loc[model.calibration_index_]
+
+    shared = set(fit_part["episode_id"]) & set(calibration_part["episode_id"])
+    assert not shared, (
+        f"{len(shared)} episodes straddle the inner cut; their calibration-slice "
+        f"labels are readable from their fit-slice rows"
+    )
+    assert fit_part["decided_at"].max() < calibration_part["decided_at"].min(), (
+        "the calibration slice is not strictly later by decision time. Ordering "
+        "by failed_at sorts by episode start, so a long episode's later "
+        "decisions land on the wrong side of the cut."
+    )
+
+
+def test_the_inner_split_holds_out_customers_when_the_regime_is_cold_start(split):
+    """Regression: the inner split must hold out the same thing the outer one does.
+
+    The model always cut the inner split temporally, whatever it was being
+    scored against. Under a customer-based outer split that meant 3,533 of
+    3,712 calibration-slice customers were also in the base model's fit slice,
+    so the calibrator was selected on people the booster had memorised and then
+    applied to strangers. It chose isotonic on a selection ECE of 0.0074
+    against 0.0153 for no calibration — and on the held-out test set isotonic
+    was worse on every metric, ECE included, costing 0.0131 of PR-AUC.
+
+    A confident, reproducible selection drawn from the wrong distribution.
+    """
+    model = RecoveryModel(max_iter=60, calibration_fraction=0.25).fit(
+        split.train, order_by=None, group_by="customer_id"
+    )
+    fit_customers = set(split.train.loc[model.fit_index_]["customer_id"])
+    calibration_customers = set(
+        split.train.loc[model.calibration_index_]["customer_id"]
+    )
+    assert not (fit_customers & calibration_customers), (
+        "the calibrator was selected on customers the base model had already "
+        "seen, which is not the condition it will be scored under"
+    )
+    selection_customers = set(split.train.loc[model.selection_index_]["customer_id"])
+    assert not (fit_customers & selection_customers)
 
 
 def test_calibration_is_chosen_by_measurement_not_assumption(fitted):
@@ -170,12 +227,24 @@ def test_declining_to_calibrate_still_produces_predictions(split):
 
 def test_calibration_selection_uses_data_the_base_model_never_saw(split):
     """Selecting on the base model's own training data would pick whichever
-    candidate overfits hardest."""
+    candidate overfits hardest.
+
+    The previous version of this test re-derived the calibration slice with the
+    same arithmetic the model used and asserted the two lengths matched. It
+    never touched the base model, and would have passed unchanged if selection
+    had been run on the training rows.
+    """
     model = RecoveryModel(max_iter=60, calibration_fraction=0.25).fit(split.train)
-    ordered = split.train.sort_values("failed_at")
-    calibration_part = ordered.iloc[model.fit_rows_ :]
-    assert len(calibration_part) == model.calibration_rows_
-    assert model.calibration_rows_ > 0
+    assert len(model.selection_index_) > 0
+
+    fit_episodes = set(split.train.loc[model.fit_index_]["episode_id"])
+    selection = split.train.loc[model.selection_index_]
+
+    assert not (set(selection["episode_id"]) & fit_episodes), (
+        "the calibration method was chosen on episodes the base model trained "
+        "on, so the winner is whichever candidate overfits hardest"
+    )
+    assert set(model.selection_index_) <= set(model.calibration_index_)
 
 
 def test_an_explicit_method_overrides_the_selection(split):
@@ -327,9 +396,30 @@ def test_the_model_is_not_uniformly_good_across_dispositions(fitted, split):
 
 
 def test_feature_importance_is_ranked_and_covers_the_feature_set(fitted, split):
+    """Covers every feature, and ranks a known-worthless one near the bottom.
+
+    Asserting ``is_monotonic_decreasing`` on the returned series, as this test
+    used to, checks nothing: ``feature_importance`` sorts descending before
+    returning, so it holds even if every importance is identical noise. The
+    injected random column is the real check — permutation importance that is
+    working puts it at the bottom.
+    """
     importance = fitted.feature_importance(split.test, n_repeats=2, sample=1500)
     assert set(importance["feature"]) == set(fitted.spec_.columns)
-    assert importance["importance"].is_monotonic_decreasing
+
+    rng = np.random.default_rng(11)
+    noisy_train = split.train.assign(pure_noise=rng.normal(size=len(split.train)))
+    noisy_test = split.test.assign(pure_noise=rng.normal(size=len(split.test)))
+    model = RecoveryModel(max_iter=60).fit(noisy_train)
+    ranked = model.feature_importance(noisy_test, n_repeats=2, sample=1500)
+
+    position = ranked.reset_index(drop=True).index[
+        ranked.reset_index(drop=True)["feature"] == "pure_noise"
+    ][0]
+    assert position > len(ranked) * 0.5, (
+        f"a column of pure noise ranked {position + 1} of {len(ranked)}; "
+        f"permutation importance is not measuring what it claims to"
+    )
 
 
 def test_failure_code_is_the_dominant_feature(fitted, split):
@@ -418,13 +508,30 @@ def test_the_timing_head_beats_the_action_head_at_timing(heads, split):
 
 def test_the_action_head_beats_the_timing_head_at_action_choice(heads, split):
     """The mirror. Each head must win on its own question, or one of them is
-    simply worse rather than different."""
-    from rebound.model import TARGET_DOWNSTREAM
+    simply worse rather than different.
 
-    truth = split.test[TARGET_DOWNSTREAM].astype(int)
-    action = classification_report(truth, heads.predict_downstream(split.test))
-    timing = classification_report(truth, heads.predict_immediate(split.test))
-    assert action.pr_auc > timing.pr_auc
+    Scored on collecting rows only, and that is not a detail. The previous
+    version scored both heads on *all* test rows. The timing head's
+    ``FeatureSpec`` pins ``action`` to the three collecting actions, so every
+    other action maps to NaN — 46% of test rows at full scale. It compared a
+    model that could see the action against one that could not, on half the
+    data. The conclusion happened to be true; the test did not establish it.
+
+    Matched rows and matched label, so the only difference left is the label
+    each head was trained on.
+    """
+    from rebound.model import TARGET_DOWNSTREAM, TwoHeadedModel
+
+    collecting = TwoHeadedModel.collecting_rows(split.test)
+    truth = collecting[TARGET_DOWNSTREAM].astype(int)
+
+    action = classification_report(truth, heads.predict_downstream(collecting))
+    timing = classification_report(truth, heads.predict_immediate(collecting))
+
+    assert action.pr_auc > timing.pr_auc, (
+        f"action head PR-AUC {action.pr_auc:.4f} does not beat the timing "
+        f"head's {timing.pr_auc:.4f} on the downstream label"
+    )
 
 
 def test_too_few_collecting_rows_is_rejected(split):

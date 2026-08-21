@@ -20,7 +20,12 @@ from rebound.eval.metrics import (
     reliability_table,
     slice_report,
 )
-from rebound.eval.splits import all_splits, assert_split_is_clean, split_report
+from rebound.eval.splits import (
+    SplitKind,
+    all_splits,
+    assert_split_is_clean,
+    split_report,
+)
 from rebound.model import (
     TARGET_DOWNSTREAM,
     TARGET_IMMEDIATE,
@@ -78,11 +83,21 @@ def main() -> None:
     for name, split in splits.items():
         banner(f"{name.upper()} SPLIT")
 
-        heads = TwoHeadedModel().fit(split.train)
+        # The inner calibration split must hold out the same *thing* the outer
+        # split holds out, or the calibrator is chosen under a regime it will
+        # never be scored under. Time: hold out the future, grouped by episode.
+        # Customer: hold out whole customers, unordered.
+        regime = (
+            dict(order_by="decided_at", group_by="episode_id")
+            if split.kind is SplitKind.TIME
+            else dict(order_by=None, group_by="customer_id")
+        )
+        heads = TwoHeadedModel().fit(split.train, **regime)
         model = heads.downstream
+        held_out = "later" if split.kind is SplitKind.TIME else "held-out-customer"
         print(
             f"fitted on {model.fit_rows_:,} rows, calibrated on a disjoint "
-            f"later {model.calibration_rows_:,}"
+            f"{held_out} {model.calibration_rows_:,}"
         )
         print(
             f"calibration chosen by measurement: {model.calibration_method_used_} "
@@ -144,6 +159,28 @@ def main() -> None:
             f"  trained on {heads.immediate_rows_:,} collecting rows; "
             f"calibration chose {heads.immediate.calibration_method_used_}"
         )
+
+        # The comparison that justifies two heads, printed rather than typed.
+        # Both heads, same rows, both labels. Comparing the timing head's ROC
+        # on collecting rows against the action head's on *all* rows is not a
+        # comparison at all: different rows, different label, different base
+        # rate. Each head has to win on its own question, on matched data.
+        print("\n  matched comparison — same rows (collecting), both labels:")
+        matched = []
+        for label_name, y in (
+            (TARGET_IMMEDIATE, imm_truth),
+            (TARGET_DOWNSTREAM, imm_test[TARGET_DOWNSTREAM].astype(int)),
+        ):
+            row = {"label": label_name}
+            for head_name, probs in (
+                ("timing head", heads.predict_immediate(imm_test)),
+                ("action head", heads.predict_downstream(imm_test)),
+            ):
+                rep = classification_report(y, probs)
+                row[f"{head_name} pr"] = round(rep.pr_auc, 4)
+                row[f"{head_name} roc"] = round(rep.roc_auc, 4)
+            matched.append(row)
+        print(pd.DataFrame(matched).to_string(index=False))
 
         print("\nreliability (calibrated):")
         rel = reliability_table(truth, scored["rebound"], bins=10)
