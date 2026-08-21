@@ -70,7 +70,7 @@ def test_customer_history_is_strictly_backward_looking(log):
 def test_prior_rates_are_zero_before_any_history(log):
     fresh = log[log["cust_prior_failures"] == 0]
     assert (fresh["cust_prior_recovery_rate"] == 0).all()
-    assert (fresh["cust_prior_mean_failure_day"] == 0).all()
+    assert (fresh["cust_prior_recoveries"] == 0).all()
 
 
 def test_prior_recoveries_never_exceed_prior_failures(log):

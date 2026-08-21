@@ -21,7 +21,13 @@ from rebound.eval.metrics import (
     slice_report,
 )
 from rebound.eval.splits import all_splits, assert_split_is_clean, split_report
-from rebound.model import TARGET, FailureCodePrior, GlobalPrior, RecoveryModel
+from rebound.model import (
+    TARGET_DOWNSTREAM,
+    TARGET_IMMEDIATE,
+    FailureCodePrior,
+    GlobalPrior,
+    TwoHeadedModel,
+)
 from rebound.sim.dataset import GenerationConfig, feature_columns, generate_log
 
 pd.set_option("display.width", 200)
@@ -46,7 +52,7 @@ def main() -> None:
         f"{len(log):,} decision points · {log['episode_id'].nunique():,} episodes "
         f"· {log['customer_id'].nunique():,} customers"
     )
-    print(f"base rate ({TARGET}): {log[TARGET].mean():.4f}")
+    print(f"base rate ({TARGET_DOWNSTREAM}): {log[TARGET_DOWNSTREAM].mean():.4f}")
     print(f"selectable features: {len(feature_columns(log))}")
 
     banner("SPLITS")
@@ -72,7 +78,8 @@ def main() -> None:
     for name, split in splits.items():
         banner(f"{name.upper()} SPLIT")
 
-        model = RecoveryModel().fit(split.train)
+        heads = TwoHeadedModel().fit(split.train)
+        model = heads.downstream
         print(
             f"fitted on {model.fit_rows_:,} rows, calibrated on a disjoint "
             f"later {model.calibration_rows_:,}"
@@ -95,7 +102,7 @@ def main() -> None:
             "rebound": model.predict_proba(split.test),
         }
 
-        truth = split.test[TARGET].astype(int)
+        truth = split.test[TARGET_DOWNSTREAM].astype(int)
         rows = []
         for label, probs in scored.items():
             report = classification_report(truth, probs, capacity=0.10)
@@ -119,7 +126,24 @@ def main() -> None:
         print(f"\nbase rate: {truth.mean():.4f}   n = {len(truth):,}")
         print(table.to_string(index=False))
 
-        results[name] = {"model": model, "probs": scored["rebound"], "split": split}
+        results[name] = {"model": model, "heads": heads, "probs": scored["rebound"], "split": split}
+
+        imm_test = TwoHeadedModel.collecting_rows(split.test)
+        imm_truth = imm_test[TARGET_IMMEDIATE].astype(int)
+        imm = classification_report(imm_truth, heads.predict_immediate(imm_test))
+        print(
+            f"\nTIMING HEAD (target={TARGET_IMMEDIATE}, collecting actions only, "
+            f"n={len(imm_test):,}, base rate {imm_truth.mean():.4f})"
+        )
+        print(
+            f"  pr_auc={imm.pr_auc:.4f}  roc_auc={imm.roc_auc:.4f}  "
+            f"ece={imm.expected_calibration_error:.4f}  "
+            f"prec@{imm.capacity_label}={imm.precision_at_capacity:.4f}"
+        )
+        print(
+            f"  trained on {heads.immediate_rows_:,} collecting rows; "
+            f"calibration chose {heads.immediate.calibration_method_used_}"
+        )
 
         print("\nreliability (calibrated):")
         rel = reliability_table(truth, scored["rebound"], bins=10)
@@ -154,7 +178,7 @@ def main() -> None:
     for name, payload in results.items():
         split = payload["split"]
         report = classification_report(
-            split.test[TARGET].astype(int), payload["probs"]  # type: ignore[arg-type]
+            split.test[TARGET_DOWNSTREAM].astype(int), payload["probs"]  # type: ignore[arg-type]
         )
         print(
             f"  {name:9s} pr_auc={report.pr_auc:.4f}  roc_auc={report.roc_auc:.4f}  "

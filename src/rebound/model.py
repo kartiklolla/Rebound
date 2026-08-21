@@ -44,7 +44,24 @@ from sklearn.inspection import permutation_importance
 
 from rebound.sim.dataset import feature_columns
 
-TARGET = "episode_recovered"
+TARGET_DOWNSTREAM = "episode_recovered"
+"""Did the episode ultimately recover. Answers *which action*."""
+
+TARGET_IMMEDIATE = "succeeded"
+"""Did this action collect the money right now. Answers *when*."""
+
+TARGET = TARGET_DOWNSTREAM
+
+#: Actions that can actually collect money, and therefore the only rows on
+#: which an immediate-success label means anything.
+#:
+#: A nudge is structurally incapable of collecting, so its immediate label is
+#: always 0. Training the timing head on those rows teaches it that nudges
+#: never work — true, irrelevant, and it swamps the base rate of the rows that
+#: matter.
+COLLECTING_ACTIONS: frozenset[str] = frozenset(
+    {"retry_same_rail", "retry_alt_rail", "send_collect_link"}
+)
 
 
 def _expected_calibration_error(
@@ -206,6 +223,7 @@ class RecoveryModel:
 
     def __init__(
         self,
+        target: str = TARGET_DOWNSTREAM,
         seed: int = 20260821,
         calibration_fraction: float = 0.25,
         calibration_method: str = "auto",
@@ -220,6 +238,7 @@ class RecoveryModel:
                 f"calibration_fraction must be in [0.05, 0.5], got "
                 f"{calibration_fraction}"
             )
+        self.target = target
         self.seed = seed
         self.calibration_fraction = calibration_fraction
         self.calibration_method = calibration_method
@@ -251,11 +270,11 @@ class RecoveryModel:
         calibrator see the same period the base model trained on, which is the
         subtle version of calibrating on your own training data.
         """
-        if TARGET not in frame.columns:
-            raise ValueError(f"frame has no {TARGET!r} column")
-        if frame[TARGET].nunique() < 2:
+        if self.target not in frame.columns:
+            raise ValueError(f"frame has no {self.target!r} column")
+        if frame[self.target].nunique() < 2:
             raise ValueError(
-                f"{TARGET} has a single class in this frame; there is nothing "
+                f"{self.target} has a single class in this frame; there is nothing "
                 f"to learn and every metric would be undefined"
             )
 
@@ -263,7 +282,7 @@ class RecoveryModel:
         cut = int(len(ordered) * (1.0 - self.calibration_fraction))
         fit_part, calibration_part = ordered.iloc[:cut], ordered.iloc[cut:]
 
-        if calibration_part[TARGET].nunique() < 2:
+        if calibration_part[self.target].nunique() < 2:
             raise ValueError(
                 "the calibration slice has a single outcome class. A calibrator "
                 "fitted on it would map every probability to a constant."
@@ -274,7 +293,9 @@ class RecoveryModel:
         self.calibration_rows_ = len(calibration_part)
 
         self.base_ = HistGradientBoostingClassifier(**self.params)
-        self.base_.fit(self.spec_.transform(fit_part), fit_part[TARGET].astype(int))
+        self.base_.fit(
+            self.spec_.transform(fit_part), fit_part[self.target].astype(int)
+        )
 
         self._fit_calibrator(calibration_part)
         return self
@@ -301,7 +322,7 @@ class RecoveryModel:
         legitimate rather than a way of picking the flattering number.
         """
         assert self.spec_ is not None and self.base_ is not None
-        y = calibration_part[TARGET].astype(int)
+        y = calibration_part[self.target].astype(int)
 
         if self.calibration_method != "auto":
             self.calibration_method_used_ = self.calibration_method
@@ -315,7 +336,7 @@ class RecoveryModel:
             calibration_part.iloc[:half],
             calibration_part.iloc[half:],
         )
-        eval_y = inner_eval[TARGET].astype(int).to_numpy()
+        eval_y = inner_eval[self.target].astype(int).to_numpy()
 
         candidates: dict[str, float] = {
             "none": _expected_calibration_error(
@@ -324,14 +345,14 @@ class RecoveryModel:
         }
         fitted: dict[str, CalibratedClassifierCV] = {}
 
-        if inner_fit[TARGET].nunique() > 1 and len(inner_eval) > 0:
+        if inner_fit[self.target].nunique() > 1 and len(inner_eval) > 0:
             for method in ("sigmoid", "isotonic"):
                 try:
                     calibrator = CalibratedClassifierCV(
                         FrozenEstimator(self.base_), method=method
                     ).fit(
                         self.spec_.transform(inner_fit),
-                        inner_fit[TARGET].astype(int),
+                        inner_fit[self.target].astype(int),
                     )
                 except ValueError:
                     continue
@@ -397,7 +418,7 @@ class RecoveryModel:
         result = permutation_importance(
             self.base_,
             self.spec_.transform(subset),
-            subset[TARGET].astype(int),
+            subset[self.target].astype(int),
             n_repeats=n_repeats,
             random_state=self.seed,
             scoring="average_precision",
@@ -413,3 +434,80 @@ class RecoveryModel:
             .sort_values("importance", ascending=False)
             .reset_index(drop=True)
         )
+
+
+# ==========================================================================
+# Two heads
+# ==========================================================================
+
+
+class TwoHeadedModel:
+    """Two questions, two labels, two models.
+
+    The sequencer asks two things that look similar and are not:
+
+    **"When should I present this retry?"** The answer depends almost entirely
+    on whether the account will have money on that date, which is driven by the
+    customer's salary cycle. Measured on retry actions against insufficient
+    funds, immediate success runs 0.65 within a few days of payday and 0.22
+    three weeks later — a threefold spread.
+
+    **"Which action should I take at all?"** The answer depends on the failure's
+    disposition, what has already been tried, and how much contact the customer
+    has absorbed. Timing barely enters into it.
+
+    A single model trained on the downstream label answers the second question
+    well and the first one not at all. That was measured rather than assumed:
+    on the downstream label, adding a *perfect oracle view* of the hidden
+    salary day moved PR-AUC from 0.7520 to 0.7870, while on the immediate label
+    the same oracle moved it from 0.6362 to 0.7332. The downstream label
+    aggregates the whole episode, so later actions wash out the timing of any
+    single decision — it dilutes exactly the signal a timing decision runs on.
+
+    Both labels are correct. Neither is sufficient. So there are two heads:
+
+    ``immediate``
+        Trained on ``succeeded`` over collecting actions only. Used to choose
+        *when*, and to price a candidate retry moment.
+    ``downstream``
+        Trained on ``episode_recovered`` over everything. Used to choose
+        *which action*, and to price the whole remaining episode.
+    """
+
+    name = "rebound_two_headed"
+
+    def __init__(self, seed: int = 20260821, **model_kwargs) -> None:
+        self.seed = seed
+        self.model_kwargs = model_kwargs
+        self.immediate = RecoveryModel(
+            target=TARGET_IMMEDIATE, seed=seed, **model_kwargs
+        )
+        self.downstream = RecoveryModel(
+            target=TARGET_DOWNSTREAM, seed=seed, **model_kwargs
+        )
+        self.immediate_rows_ = 0
+
+    @staticmethod
+    def collecting_rows(frame: pd.DataFrame) -> pd.DataFrame:
+        """Rows where an immediate-success label carries information."""
+        return frame[frame["action"].isin(COLLECTING_ACTIONS)]
+
+    def fit(self, frame: pd.DataFrame, order_by: str | None = "failed_at"):
+        collecting = self.collecting_rows(frame)
+        if len(collecting) < 200:
+            raise ValueError(
+                f"only {len(collecting)} collecting-action rows; the timing "
+                f"head has nothing to learn from"
+            )
+        self.immediate_rows_ = len(collecting)
+        self.immediate.fit(collecting, order_by=order_by)
+        self.downstream.fit(frame, order_by=order_by)
+        return self
+
+    def predict_immediate(self, frame: pd.DataFrame) -> np.ndarray:
+        """P(this action collects the money now). For choosing *when*."""
+        return self.immediate.predict_proba(frame)
+
+    def predict_downstream(self, frame: pd.DataFrame) -> np.ndarray:
+        """P(the episode ultimately recovers). For choosing *which action*."""
+        return self.downstream.predict_proba(frame)

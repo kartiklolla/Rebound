@@ -288,7 +288,7 @@ _TWIN_COLUMNS: tuple[str, ...] = (
     "prior_contacts",
     "cust_prior_failures",
     "cust_prior_recoveries",
-    "cust_prior_mean_failure_day",
+    "cust_prior_recovery_rate",
 )
 
 
@@ -304,7 +304,14 @@ def _assert_no_feature_twins(split: Split, tolerance: float) -> None:
         return
 
     def fingerprint(frame: pd.DataFrame) -> pd.Series:
-        return frame[columns].astype(str).agg("|".join, axis=1)
+        # Missing values are given an explicit token rather than being cast.
+        # ``astype(str)`` leaves NaN as a float under pandas 3, which makes the
+        # join raise — and a fingerprint that silently skipped NaN-bearing
+        # columns would quietly stop detecting clones in exactly the features
+        # that carry missingness.
+        return (
+            frame[columns].astype("string").fillna("<missing>").agg("|".join, axis=1)
+        )
 
     train_prints = set(fingerprint(split.train))
     test_prints = fingerprint(split.test)

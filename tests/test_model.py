@@ -338,3 +338,114 @@ def test_failure_code_is_the_dominant_feature(fitted, split):
     is the timing and action choice on top of it."""
     importance = fitted.feature_importance(split.test, n_repeats=2, sample=1500)
     assert importance.iloc[0]["feature"] == "failure_code"
+
+
+# ==========================================================================
+# Two heads
+# ==========================================================================
+
+
+@pytest.fixture(scope="module")
+def heads(split):
+    from rebound.model import TwoHeadedModel
+
+    return TwoHeadedModel(max_iter=120).fit(split.train)
+
+
+def test_both_heads_are_fitted(heads):
+    from rebound.model import TARGET_DOWNSTREAM, TARGET_IMMEDIATE
+
+    assert heads.immediate.target == TARGET_IMMEDIATE
+    assert heads.downstream.target == TARGET_DOWNSTREAM
+    assert heads.immediate.calibrated_ is not None or heads.immediate.base_ is not None
+    assert heads.downstream.base_ is not None
+
+
+def test_the_timing_head_trains_only_on_collecting_actions(split):
+    """A nudge is structurally incapable of collecting, so its immediate label
+    is always 0. Training the timing head on those rows teaches it that nudges
+    never work — true, irrelevant, and it swamps the base rate of the rows that
+    matter."""
+    from rebound.model import COLLECTING_ACTIONS, TwoHeadedModel
+
+    collecting = TwoHeadedModel.collecting_rows(split.train)
+    assert set(collecting["action"]) <= COLLECTING_ACTIONS
+    assert len(collecting) < len(split.train)
+    assert collecting["succeeded"].mean() > 0, (
+        "collecting actions must sometimes collect, or the label is degenerate"
+    )
+
+
+def test_nudges_are_excluded_and_would_have_a_degenerate_label(split):
+    nudges = split.train[split.train["action"].str.startswith("nudge")]
+    assert len(nudges) > 50
+    assert nudges["succeeded"].mean() == 0.0
+
+
+def test_the_two_heads_disagree(heads, split):
+    """If they produced the same numbers there would be no reason for two."""
+    a = heads.predict_immediate(split.test)
+    b = heads.predict_downstream(split.test)
+    assert np.abs(a - b).mean() > 0.05
+
+
+def test_the_timing_head_beats_the_action_head_at_timing(heads, split):
+    """The measurement that justifies the whole architecture.
+
+    Choosing *when* to present a retry and choosing *which action* to take are
+    different questions. A single model trained on the downstream label answers
+    the second well and the first poorly, because the downstream label
+    aggregates the whole episode and washes out the timing of any one decision.
+
+    So on the immediate label, over rows that can actually collect, the head
+    trained for it must win. If it ever stops winning, the second head is dead
+    weight and should be deleted.
+    """
+    from rebound.model import TARGET_IMMEDIATE, TwoHeadedModel
+
+    collecting = TwoHeadedModel.collecting_rows(split.test)
+    truth = collecting[TARGET_IMMEDIATE].astype(int)
+
+    timing = classification_report(truth, heads.predict_immediate(collecting))
+    action = classification_report(truth, heads.predict_downstream(collecting))
+
+    assert timing.pr_auc > action.pr_auc, (
+        f"timing head PR-AUC {timing.pr_auc:.4f} does not beat the action head's "
+        f"{action.pr_auc:.4f} on the immediate label; the split is not earning "
+        f"its complexity"
+    )
+
+
+def test_the_action_head_beats_the_timing_head_at_action_choice(heads, split):
+    """The mirror. Each head must win on its own question, or one of them is
+    simply worse rather than different."""
+    from rebound.model import TARGET_DOWNSTREAM
+
+    truth = split.test[TARGET_DOWNSTREAM].astype(int)
+    action = classification_report(truth, heads.predict_downstream(split.test))
+    timing = classification_report(truth, heads.predict_immediate(split.test))
+    assert action.pr_auc > timing.pr_auc
+
+
+def test_too_few_collecting_rows_is_rejected(split):
+    from rebound.model import TwoHeadedModel
+
+    nudges = split.train[split.train["action"].str.startswith("nudge")]
+    with pytest.raises(ValueError, match="collecting-action rows"):
+        TwoHeadedModel().fit(nudges)
+
+
+def test_the_removed_salary_proxies_stay_removed(log):
+    """Both were built, measured, and deleted — the failure-day version because
+    it was a duplicate of billing_day, the recovery-day version because it made
+    the model measurably worse. Re-adding either needs new evidence, not a
+    fresh round of the same reasoning."""
+    banned = {
+        "cust_prior_mean_failure_day",
+        "cust_prior_recovery_day_mean",
+        "cust_days_from_recovery_day",
+        "cust_days_since_last_success",
+    }
+    assert not banned & set(log.columns), (
+        f"a removed salary proxy is back: {banned & set(log.columns)}"
+    )

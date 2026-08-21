@@ -23,11 +23,45 @@ timing never varied. The ladder jitters both the delay and the hour of day.
 
 **Its features must be strictly backward-looking.** Per-customer history is
 accumulated in chronological order and read before it is updated, so a row can
-only ever see that customer's past. The subtle prize here is
-``cust_prior_mean_failure_day``: the average day-of-month this customer has
-previously failed on. It is entirely observable to a merchant, and it is a
-proxy for the customer's hidden salary day. Inferring the latent from history
-is the learning problem this dataset is built to pose.
+only ever see that customer's past.
+
+On the salary-cycle proxy that is not here
+------------------------------------------
+A customer's hidden salary day drives the largest effect in this world: a retry
+succeeds 0.65 of the time within a few days of payday and 0.22 of the time three
+weeks later. Two features were built to let the model infer it, and **both were
+removed after measurement**. The record is kept because the second attempt was a
+good idea that simply did not work, and deleting the evidence would leave the
+next person to rebuild it.
+
+*Attempt one* — the average day-of-month the customer previously **failed** on,
+reasoning that failures cluster away from payday. They do not cluster anywhere:
+every failure for a mandate lands on its fixed billing day. The feature
+correlated **1.0000 with ``billing_day``** and 0.0226 with the actual salary
+day. A duplicate column wearing an explanation.
+
+*Attempt two* — the average day-of-month the customer previously **recovered**
+on, plus its circular distance from today. Successful debits only happen when
+the account has money, so they should cluster near payday, and they do:
+correlation with the hidden latent rose to **0.1972**, and unlike the first
+attempt it was genuinely independent of ``billing_day`` (correlation −0.04).
+
+It still made the model worse. Measured on the exact case it was designed for —
+collecting actions against insufficient funds, immediate label — PR-AUC went
+0.6275 without it to 0.6210 with it, and every subset was worse than none::
+
+    neither          0.6275
+    day-proxy only   0.6237
+    both             0.6210
+    recency only     0.6164
+
+A 0.20 correlation is weak enough that the tree spends splits on it and
+overfits, and the feature is missing for the ~37% of rows with no recovery
+history yet. Correct reasoning, measurably negative result.
+
+An oracle handed the true latent reaches 0.7205, so roughly 80% of the timing
+signal is still unclaimed. That is a real limitation, stated plainly rather than
+papered over with a feature that does not earn its place.
 
 Logged propensities
 -------------------
@@ -128,22 +162,12 @@ class _CustomerHistory:
     failures: int = 0
     recoveries: int = 0
     contacts: int = 0
-    failure_day_total: int = 0
     revoked: bool = False
 
     @property
     def recovery_rate(self) -> float:
         return self.recoveries / self.failures if self.failures else 0.0
 
-    @property
-    def mean_failure_day(self) -> float:
-        """Average day-of-month this customer has previously failed on.
-
-        Observable to any merchant, and a usable proxy for the customer's
-        hidden salary day. The model is never told the salary day; this is one
-        of the few routes by which it can be inferred.
-        """
-        return self.failure_day_total / self.failures if self.failures else 0.0
 
 
 # --------------------------------------------------------------------------
@@ -234,7 +258,6 @@ def generate_log(
 
             # Update history only after the episode is fully recorded.
             record.failures += 1
-            record.failure_day_total += billing_date.day
             record.contacts += episode.contacts_made
             if episode.resolved:
                 record.recoveries += 1
@@ -467,10 +490,10 @@ def _observable_features(
 ) -> dict:
     """Everything a merchant would genuinely know at this decision point.
 
-    Nothing here touches a customer latent. The closest thing to one is
-    ``cust_prior_mean_failure_day``, which is computed from the merchant's own
-    billing records and is exactly the kind of inference the model is meant to
-    have to make.
+    Nothing here touches a customer latent. The closest things are the
+    ``cust_*`` salary-cycle proxies, which are computed entirely from the
+    merchant's own billing records and are exactly the kind of inference the
+    model is meant to have to make.
     """
     mandate = episode.mandate
     mode = get_mode(episode.failure_code)
@@ -518,7 +541,6 @@ def _observable_features(
         "cust_prior_failures": record.failures,
         "cust_prior_recoveries": record.recoveries,
         "cust_prior_recovery_rate": record.recovery_rate,
-        "cust_prior_mean_failure_day": record.mean_failure_day,
         "cust_prior_contacts": record.contacts,
         # -- the action -----------------------------------------------------
         "action": str(action),
