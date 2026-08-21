@@ -19,11 +19,12 @@
 | 05a | **Adversarial review + hardening** | ✅ done — 13 findings fixed, 352 tests |
 | 06 | Recovery-probability model + calibration | ✅ done |
 | 07 | Two-headed model (timing + action) | ✅ done — 385 tests |
-| 07 | Compliance gate (non-bypassable) | ⬜ not started |
-| 08 | Sequencer / agent policy | ⬜ not started |
-| 09 | LLM comms layer (Hinglish/multilingual) | ⬜ not started |
-| 10 | Batch runner + demo dashboard | ⬜ not started |
-| 11 | README, metrics writeup, provenance table | ⬜ not started |
+| 07a | **Independent audit of the model layer + fixes** | ✅ done — 6 findings fixed, 387 tests |
+| 08 | Compliance gate (non-bypassable) | ⬜ not started |
+| 09 | Sequencer / agent policy | ⬜ not started |
+| 10 | LLM comms layer (Hinglish/multilingual) | ⬜ not started |
+| 11 | Batch runner + demo dashboard | ⬜ not started |
+| 12 | README, metrics writeup, provenance table | ⬜ not started |
 
 Legend: ⬜ not started · 🟡 in progress · ✅ done
 
@@ -127,10 +128,25 @@ Selecting on data the base model never saw is what makes it legitimate rather th
 of picking the flattering number.
 
 It earned its place immediately. At full scale it chose **sigmoid** over the isotonic I
-had hardcoded (held-out ECE: sigmoid 0.0141, isotonic 0.0151, none 0.0207), which on
-test gave ECE 0.0205 → 0.0117 with PR-AUC **unchanged** at 0.6025. The hardcoded isotonic
-had been costing 0.0075 PR-AUC for worse calibration. On the customer split, isotonic won
-instead — so a fixed choice would have been wrong on one split or the other.
+had hardcoded, and the hardcoded choice had been costing PR-AUC for worse calibration.
+
+**Then the audit found the measurement was taken under the wrong regime.** The inner
+split was always temporal, whatever the outer split was holding out. On the customer
+split that meant 3,533 of 3,712 calibration-slice customers were also in the base model's
+fit slice, so the calibrator was selected on people the booster had memorised and applied
+to strangers. It picked isotonic on a selection ECE of 0.0074 against 0.0153 for none -
+and on test isotonic was worse on *every* metric, ECE included (0.0102 vs 0.0082), while
+costing 0.0131 PR-AUC. Confident, reproducible, drawn from the wrong distribution.
+
+The inner split now mirrors the outer one: episode-grouped and temporal for the time
+split, customer-disjoint and unordered for the customer split. Post-fix, held-out ECE is
+sigmoid 0.0102 / isotonic 0.0128 / none 0.0191 on time and sigmoid 0.0179 / none 0.0184 /
+isotonic 0.0186 on customer. Sigmoid now wins on both for the action head and isotonic on
+both for the timing head - so the choice varies by *head*, not by split, and calibration
+no longer costs any discrimination (PR-AUC identical calibrated and raw on both splits).
+
+The lesson is not "measure instead of assume." It is that a measurement taken under the
+wrong regime is worth less than an assumption you knew was an assumption.
 
 `calibration_scores_` records every candidate. "We calibrated" and "we checked whether
 calibrating helped" are different claims.
@@ -270,6 +286,47 @@ is fatal by design.
 
 ---
 
+### D20 - The model layer was audited by an agent that had not built it (2026-08-21)
+
+After the two heads were finished, the whole model layer went to an independent agent
+with the source, no access to the reasoning behind it, and an instruction to find things
+that were wrong rather than to confirm things that were right.
+
+It found six defects. Four were in code, and all four had been making the model quietly
+worse while 385 tests reported green:
+
+1. **The calibrator was selected under the wrong generalisation regime.** The single most
+   valuable finding. Detailed in the calibration section above.
+2. **`decision_index` and `prior_attempts` were byte-identical** in all 162,743 rows.
+   `decision_index` was even *commented* as an identifier at its construction site - it
+   had simply never been added to `IDENTIFIER_COLUMNS`, and the allowlist happily passed
+   it through. A comment is not a control.
+3. **Two tests could not fail.** One asserted that a sorted column was sorted. The other
+   re-derived a slice with the same arithmetic it was meant to be checking. Both were
+   named for properties that were, at the time, actually violated in the data.
+4. **The two-head comparison was not like-for-like.**
+
+Plus two reporting defects: every metric table in this file was a full run stale, and the
+claim that excluding `customer_id` prevents customer memorisation was wrong - the tuple
+`(bank, billing_day, amount, ceiling, rail)` is unique across all 5,974 customers.
+
+Three things worth keeping from this:
+
+**The tests were the problem, not the safety net.** Two of them were named for exactly the
+defects that were present and passed anyway. A test that re-derives the value it is
+checking, using the code under test, always passes. Writing the assertion against
+*recorded state* - what the model actually did - rather than against a recomputation is
+what made them bite.
+
+**Fixing all four moved the headline numbers up** (time PR-AUC 0.6074 to 0.6213, customer
+0.6325 to 0.6578, customer ECE 0.0102 to 0.0035). Defects that make the numbers worse are
+the hard ones to find, because nothing looks wrong.
+
+**I wrote a docstring citing a test I had not written yet.** While fixing finding 2 I
+described `test_no_two_features_are_identical` as the guard preventing recurrence, and it
+did not exist. Caught on re-read, written, and it passes - but it is the same failure mode
+as the two tautological tests: describing a check rather than having one.
+
 ## Evaluation splits
 
 Both are built and both are reported. They answer different questions and a model can
@@ -298,62 +355,70 @@ Filled in as they land. Empty cells are honest — they mean not yet measured.
 
 ### Claim A — recovery-probability model
 
-162,743 decision points · 43,657 episodes · 5,974 customers · 32 selectable features.
-Seed 20260821. Both splits verified clean before scoring.
+162,743 decision points · 43,657 episodes · 5,974 customers · 30 selectable features.
+Seed 20260821. Both splits verified clean before scoring. Every number below is from a
+single run of `scripts/train_model.py`; nothing here is carried over by hand.
 
 | Metric | Time split | Customer split |
 |--------|-----------:|---------------:|
 | n (test) | 51,322 | 49,116 |
 | base rate | 0.1507 | 0.2161 |
-| **PR-AUC** | **0.6025** | **0.6363** |
-| ROC-AUC | 0.9143 | 0.8950 |
-| Brier | 0.0788 | 0.1055 |
-| Calibration slope | 0.972 | 1.038 |
-| ECE | 0.0117 | 0.0095 |
-| Precision @ 10% capacity | 0.6374 | 0.7119 |
-| Lift @ 10% capacity | 4.23× | 3.29× |
-| — global prior PR-AUC | 0.1507 | 0.2161 |
-| — failure-code prior PR-AUC | 0.5483 | 0.5596 |
+| **PR-AUC** | **0.6213** | **0.6578** |
+| ROC-AUC | 0.9186 | 0.8954 |
+| Brier | 0.0771 | 0.1047 |
+| Calibration slope | 0.948 | 0.998 |
+| ECE | 0.0108 | 0.0035 |
+| Precision @ 10% capacity | 0.6479 | 0.7199 |
+| Lift @ 10% capacity | 4.30x | 3.33x |
+| - global prior PR-AUC | 0.1507 | 0.2161 |
+| - failure-code prior PR-AUC | 0.5483 | 0.5596 |
 
-**Lift over the strong baseline is modest: +0.054 PR-AUC on time (+9.9% relative),
-+0.077 on customer (+13.7%).** The failure-code prior — a pivot table any merchant
-already has — gets most of the way. Reported this way round because the honest question
+**Lift over the strong baseline is modest: +0.073 PR-AUC on time (+13.3% relative),
++0.098 on customer (+17.5%).** The failure-code prior - a pivot table any merchant
+already has - gets most of the way. Reported this way round because the honest question
 is not "is the model good" but "is the model worth the machinery over a group mean."
 
 PR-AUC is not comparable across the two splits, since the base rates differ. Lift over
-base rate is: **4.23× time, 3.29× customer**, and ROC agrees (0.9143 vs 0.8950). So there
-is a real but small generalisation gap to unseen customers — in the feared direction,
+base rate is: **4.30x time, 3.33x customer**, and ROC agrees (0.9186 vs 0.8954). So there
+is a real but small generalisation gap to unseen customers - in the feared direction,
 but nowhere near the size that would indicate memorisation.
 
 ### Where the model is actually weak (per-disposition, time split)
 
 | Disposition | n | base rate | PR-AUC | ROC-AUC |
 |-------------|--:|----------:|-------:|--------:|
-| mandate_repair | 31,172 | 0.0168 | 0.1294 | 0.7694 |
-| retry_timing | 8,172 | 0.4634 | 0.6553 | 0.7216 |
-| retry_transient | 7,778 | 0.4060 | 0.5921 | 0.7113 |
-| customer_action | 2,037 | 0.0717 | 0.2997 | 0.7721 |
-| terminal | 1,871 | 0.0572 | 0.4115 | 0.8637 |
-| merchant_fix | 292 | 0.0308 | 0.0657 | 0.6302 |
+| mandate_repair | 31,172 | 0.0168 | 0.1576 | 0.8009 |
+| retry_timing | 8,172 | 0.4634 | 0.6791 | 0.7380 |
+| retry_transient | 7,778 | 0.4060 | 0.6060 | 0.7225 |
+| customer_action | 2,037 | 0.0717 | 0.3182 | 0.7564 |
+| terminal | 1,871 | 0.0572 | 0.4331 | 0.8634 |
+| merchant_fix | 292 | 0.0308 | 0.1047 | 0.7793 |
 
 **This table is the important one, and it qualifies the headline.** Aggregate ROC-AUC of
-0.914 is largely the model separating hopeless dispositions from live ones — which
+0.919 is largely the model separating hopeless dispositions from live ones - which
 `failure_code` already encodes and the taxonomy already knew. *Within* slice, where the
-decisions are actually hard, discrimination is 0.71–0.77. `merchant_fix` at 0.63 is
-barely better than a coin flip.
+decisions are actually hard, discrimination falls to 0.72-0.86. On the customer split
+`merchant_fix` is 0.64, on 370 rows.
 
 The README must not claim 0.914 without this caveat attached.
 
 ### What the model leans on (permutation importance, time split)
 
-| Feature | Importance |
-|---------|-----------:|
-| failure_code | 0.380 |
-| action | 0.114 |
-| decision_index | 0.039 |
-| within_upi_window | 0.038 |
-| decision_day_of_month | 0.018 |
-| cust_prior_contacts | 0.015 |
+| Feature | Importance | std |
+|---------|-----------:|----:|
+| failure_code | 0.39800 | 0.00725 |
+| action | 0.12265 | 0.00718 |
+| within_upi_window | 0.04409 | 0.00249 |
+| prior_actions | 0.03961 | 0.00682 |
+| decision_day_of_month | 0.02563 | 0.00390 |
+| rail | 0.01436 | 0.00302 |
+| days_since_failure | 0.01293 | 0.00154 |
+| cust_prior_contacts | 0.01234 | 0.00675 |
+
+The previous version of this table listed `decision_index` at 0.039 as a distinct signal.
+It was byte-identical to `prior_attempts`, which the table never mentioned; the two masked
+each other under permutation. Merged into `prior_actions` it measures 0.0396 - so the
+masking cost less than expected, and the damage was mostly to the honesty of the ranking.
 
 **Investigated and resolved — see the two-headed model below.** The salary signal is
 real and large; it was being measured against the wrong label.
@@ -401,7 +466,12 @@ Immediate retry success against insufficient funds, by days since the customer's
 payday: **0.6505** at days 2–5, falling to **0.2156** at days 24–31. A threefold spread,
 present in the data the whole time.
 
-The ablation explains why the first model could not see it:
+The ablation explains why the first model could not see it. **These four cells and the
+proxy table below were measured on the pre-audit model, in a one-off script that was not
+committed.** They are kept because the finding they support is the reason the architecture
+has two heads, but they are not comparable with the current numbers above and no
+reproduction path exists for them. Regenerating them behind a committed script is an open
+item, listed below.
 
 | Target | no timing features | current | + oracle `days_since_salary` |
 |--------|-------------------:|--------:|----------------------------:|
@@ -418,17 +488,33 @@ So there are two heads. **Timing** (`succeeded`, collecting actions only) prices
 
 | | Time split | Customer split |
 |---|---:|---:|
-| **Action head** PR-AUC | 0.6074 | 0.6325 |
-| ROC-AUC | 0.9137 | 0.8941 |
-| ECE | 0.0107 | 0.0102 |
-| **Timing head** PR-AUC | 0.5869 | 0.6232 |
-| ROC-AUC | **0.9427** | **0.9187** |
-| ECE | 0.0061 | 0.0085 |
+| **Action head** PR-AUC | 0.6213 | 0.6578 |
+| ROC-AUC | 0.9186 | 0.8954 |
+| ECE | 0.0108 | 0.0035 |
+| **Timing head** PR-AUC | 0.5901 | 0.6098 |
+| ROC-AUC | 0.9424 | 0.9182 |
+| ECE | 0.0074 | 0.0090 |
 | (timing head n / base rate) | 27,708 / 0.1114 | 26,391 / 0.1605 |
 
-The timing head out-discriminates the action head on ROC (0.9427 vs 0.9137) and is
-better calibrated, which is the point: it is answering a question the action head was
-never able to.
+**These two columns do not compare to each other, and the audit was right to say so.**
+The earlier claim here - "the timing head out-discriminates the action head, 0.9427 vs
+0.9137" - put a number computed on 27,708 collecting rows against `succeeded` next to one
+computed on 51,322 rows against `episode_recovered`. Different rows, different label,
+different base rate. It was not a comparison.
+
+The comparison that means something holds the rows fixed and swaps only the label. The
+script prints it now, so it cannot drift:
+
+| Same rows (collecting), time split | Timing head | Action head |
+|---|---:|---:|
+| PR-AUC on `succeeded` | **0.5901** | 0.5024 |
+| ROC on `succeeded` | **0.9424** | 0.9132 |
+| PR-AUC on `episode_recovered` | 0.6238 | **0.6769** |
+| ROC on `episode_recovered` | 0.8708 | **0.9201** |
+
+Each head wins its own question and loses the other. The real gap on the timing question
+is 0.0292 ROC, wider than the 0.0287 the bad comparison happened to show - so the
+incorrect version was understating the case for the architecture, not inflating it.
 
 ### Two salary proxies built, measured, and deleted
 
@@ -438,7 +524,10 @@ would leave someone to rebuild it.
 **`cust_prior_mean_failure_day`** — the average day-of-month the customer previously
 *failed* on. Every failure for a mandate lands on its fixed billing day, so it correlated
 **1.0000 with `billing_day`** and 0.0226 with the true salary day. A duplicate column
-wearing an explanation. Removing it alone lifted the action head from 0.6025 to 0.6074.
+wearing an explanation. Removing it alone moved the action head from 0.6025 to 0.6074 on
+the time split - and from 0.6363 to 0.6325 on the customer split, which the first draft of
+this entry did not mention. Quoting only the split that improved is the kind of reporting
+this document exists to prevent.
 
 **`cust_prior_recovery_day_mean`** and friends — the average day the customer previously
 *recovered* on. Successes only happen when the account has funds, so they should cluster
@@ -456,17 +545,18 @@ A 0.20 correlation is weak enough that the tree spends splits on it and overfits
 is missing for ~37% of rows. Not noise — seed variance within a configuration is 0.0000.
 Correct reasoning, measurably negative result, feature deleted.
 
-**An oracle handed the true latent reaches 0.7205, so ~80% of the timing signal remains
-unclaimed.** Stated as a limitation rather than papered over.
+**An oracle handed the true latent reached 0.7205 against 0.6275, so most of the timing
+signal remains unclaimed.** Stated as a limitation rather than papered over - and, per the
+note above, measured before the audit fixes and not re-run since.
 
 ### Splits actually produced
 
 | Split | Train rows | Test rows | Train customers | Test customers | Dropped |
 |-------|-----------|-----------|-----------------|----------------|---------|
-| time | 9,014 | 4,362 | 750 | 521 | 706 |
-| customer | 10,177 | 3,905 | 562 | 228 | 0 |
+| time | 106,199 | 51,322 | 5,859 | 3,783 | 5,222 |
+| customer | 113,627 | 49,116 | 4,167 | 1,807 | 0 |
 
-The 706 dropped rows are episodes straddling the time cut. Dropped rather than assigned:
+The 5,222 dropped rows are episodes straddling the time cut. Dropped rather than assigned:
 putting them in train leaks post-cut information backwards, putting them in test scores
 the model on episodes it trained on.
 
@@ -487,6 +577,13 @@ RBI / NPCI circulars, with citations in the README.
 ---
 
 ## Open questions
+
+- Regenerate the ablation, oracle, salary-proxy and Claim B tables behind a committed
+  script. They are currently hand-typed from one-off runs with no reproduction path, and
+  the audit was right that a hand-typed number is a number that can drift. The ablation
+  cells are also pre-audit and no longer comparable with the current model.
+- Re-measure the oracle ceiling against the fixed model, so the "most of the timing signal
+  is unclaimed" limitation is quantified against something current.
 
 - Whether to anchor generator failure-code distributions to published NPCI aggregate
   decline statistics (strongly preferred for credibility — synthetic data anchored to

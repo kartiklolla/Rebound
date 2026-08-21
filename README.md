@@ -70,27 +70,73 @@ episode label washes out the timing of any single decision.
 | | Time split | Customer split |
 |---|---:|---:|
 | **Action head** (`episode_recovered`) | | |
-| PR-AUC | 0.6074 | 0.6325 |
-| ROC-AUC | 0.9137 | 0.8941 |
-| ECE | 0.0107 | 0.0102 |
-| Precision @ 10% capacity | 0.6405 | 0.7034 |
+| PR-AUC | 0.6213 | 0.6578 |
+| ROC-AUC | 0.9186 | 0.8954 |
+| ECE | 0.0108 | 0.0035 |
+| Precision @ 10% capacity | 0.6479 | 0.7199 |
 | failure-code prior (baseline) | 0.5483 | 0.5596 |
 | **Timing head** (`succeeded`, collecting actions) | | |
-| PR-AUC | 0.5869 | 0.6232 |
-| ROC-AUC | **0.9427** | **0.9187** |
-| ECE | 0.0061 | 0.0085 |
+| PR-AUC | 0.5901 | 0.6098 |
+| ROC-AUC | 0.9424 | 0.9182 |
+| ECE | 0.0074 | 0.0090 |
 
-**The caveat belongs next to the number, not below it.** The action head's ROC-AUC of 0.914 is
-mostly the model separating hopeless failure dispositions from live ones — which the
+**The caveat belongs next to the number, not below it.** The action head's ROC-AUC of 0.919
+is mostly the model separating hopeless failure dispositions from live ones — which the
 failure taxonomy already encodes. Within disposition, where the decisions are actually
-hard, discrimination is 0.71–0.77, and on `merchant_fix` it is 0.63. Lift over the
-failure-code prior is +0.059 PR-AUC: real, but modest.
+hard, discrimination falls to 0.72–0.86 on the time split, and `merchant_fix` on the
+customer split is 0.64. Lift over the failure-code prior is +0.073 PR-AUC: real, but
+modest.
+
+**Two heads, compared honestly.** The heads cannot be ranked by reading their headline
+numbers against each other — those are computed on different rows, against different
+labels, at different base rates. The comparison worth making holds the rows fixed and
+swaps only the label, and `scripts/train_model.py` prints it rather than this README
+asserting it:
+
+| Same rows (collecting actions), time split | Timing head | Action head |
+|---|---:|---:|
+| ROC on `succeeded` | **0.9424** | 0.9132 |
+| ROC on `episode_recovered` | 0.8708 | **0.9201** |
+
+Each head wins its own question and loses the other. That is what justifies keeping both.
+Had either won on both, the other would be dead weight and should be deleted.
 
 Two salary-cycle proxy features were built, measured, and deleted — one was a duplicate
 of `billing_day`, the other correlated 0.20 with the hidden latent and still made the
-model worse. An oracle given the true latent reaches 0.7205 against our 0.6275, so
-roughly 80% of the timing signal remains unclaimed. Full per-slice breakdown and the
-measurements behind both deletions are in [PROGRESS.md](PROGRESS.md).
+model worse. An oracle handed the true latent reached 0.7205 against 0.6275 for the model
+as it stood at that time, so most of the timing signal is still unclaimed. That gap has
+not been re-measured since the fixes below, and the old figures are not carried forward as
+though they were current. Full per-slice breakdown and the measurements behind both
+deletions are in [PROGRESS.md](PROGRESS.md).
+
+### What a second audit found
+
+The model layer was audited independently after it was built, by an agent with no access
+to the reasoning that produced it. Six defects, four in code rather than prose, all fixed
+and all with regression tests:
+
+- **The calibrator was selected under the wrong generalisation regime.** The inner
+  calibration split was always temporal, even when the outer split held out whole
+  customers — so on the customer split the calibrator was chosen on people the booster had
+  already memorised, then applied to strangers. It confidently picked isotonic, which was
+  worse on *every* held-out metric and cost 0.013 PR-AUC. The inner split now mirrors the
+  outer one. Customer-split ECE went 0.0079 → 0.0035 and calibration stopped costing any
+  discrimination.
+- **Two features were byte-identical.** `decision_index` was documented as an identifier
+  but never added to the identifier set, so it reached the model as a twin of
+  `prior_attempts`. Permutation importance shuffles one column at a time, so each twin
+  masked the other and the published ranking was measured wrong.
+- **Two tests asserted things that could not fail.** One checked that a sorted column was
+  sorted; another re-derived a slice using the same arithmetic it was meant to be
+  checking. Both passed while the defect they were named for was present in the data.
+- **The two-head comparison was not like-for-like** — corrected above.
+- **Excluding `customer_id` does not prevent customer memorisation.** The tuple
+  `(bank, billing_day, amount, ceiling, rail)` is unique across all 5,974 customers, and
+  no allowlist can drop it without dropping five legitimate features. Quantified in
+  `eval/splits.py`, and it is the reason the customer split is reported at all.
+
+The four code defects moved the headline numbers *up*, which is the part worth noticing:
+every one of them had been making the model quietly worse while the tests reported green.
 
 ### Claim B — policy vs baselines
 
@@ -108,9 +154,16 @@ output here gets multiplied by a rupee amount to make a spend decision, so the n
 to *be* a probability.
 
 Calibration itself is treated the same way: `none`, `sigmoid` and `isotonic` are fitted
-on one slice, scored on a later disjoint one, and the winner is whichever measured best.
-It chose differently on the two splits, so a fixed choice would have been wrong on one of
-them.
+on one slice, scored on a disjoint held-out one, and the winner is whichever measured
+best. It chooses differently for the two heads — sigmoid for the action head, isotonic for
+the timing head, on both splits — so a single fixed choice would have been wrong for one
+of them.
+
+The audit found this measurement was worth less than it looked. The slice it selected on
+did not match the condition the model was scored under, and a selection made on the wrong
+distribution is confident and reproducible and still wrong. Choosing by measurement is
+only better than choosing by assumption if the measurement is taken under the right
+regime.
 
 An LLM is used where language is genuinely the problem — customer communication and the
 merchant-facing root-cause narrative.
