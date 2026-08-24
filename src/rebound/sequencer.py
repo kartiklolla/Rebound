@@ -18,11 +18,15 @@ destroys ₹346,088 per thousand doing it, because every contact carries
 revocation risk and recovery rate does not charge for it. It is the worst policy
 in the table *and* it wins the metric merchants usually watch.
 
-So each candidate is priced against the counterfactual of stopping now:
+So each candidate is priced against the counterfactual of stopping now, in
+closed form:
 
-    EV = [P(recover | act) − P(recover | stop)] × amount
+    EV = P(recover) × (amount + h × LTV)
+       − P(revoke)  × LTV × (1 − h)
        − cost(action)
-       − [P(revoke | act) − P(revoke | stop)] × LTV destroyed
+
+where ``h`` is P(the customer churns on their own | this episode is never
+recovered), estimated from the log at 0.0700 ± 0.0016.
 
 The third term is why there is a revocation head at all. Without it the
 sequencer optimises the same quantity ``aggressive_contact`` optimises, and
@@ -71,16 +75,25 @@ import numpy as np
 import pandas as pd
 
 from rebound.compliance import ComplianceGate, Request, Verdict
+from rebound.economics import (
+    LTV_HORIZON_CYCLES as _LTV_HORIZON,
+)
 from rebound.economics import attempt_cost_paise, revocation_cost_paise
+from rebound.fqi import FittedQ
 from rebound.model import (
     COLLECTING_ACTIONS,
-    TARGET_REVOKED,
+    TARGET_ACTION_REVOKED,
     RecoveryModel,
     TwoHeadedModel,
 )
 from rebound.policy import Decision, Policy
 from rebound.sim.world import EpisodeView
-from rebound.taxonomy import Action, get_mode, legal_actions
+from rebound.taxonomy import (
+    CUSTOMER_FACING_ACTIONS,
+    Action,
+    get_mode,
+    legal_actions,
+)
 
 #: Features the training log has and a deployed sequencer does not.
 #:
@@ -93,15 +106,114 @@ from rebound.taxonomy import Action, get_mode, legal_actions
 #: input shape in production has not been evaluated.
 #:
 #: So the sequencer's models are fitted *without* them. Train on what can be
-#: served. This costs some accuracy against the Claim A numbers, which is the
-#: correct price and is reported rather than absorbed: ``fit_for_serving``
-#: exists so the gap is a measured quantity instead of an unexamined one.
+#: served.
+#:
+#: This was described here as costing "some accuracy, reported rather than
+#: absorbed" before anything measured it — a claim written because it sounded
+#: like the responsible thing to say. Measured, with both arms at identical
+#: settings, dropping the four columns **does not cost accuracy at all**:
+#:
+#:     time split      PR-AUC 0.6002 -> 0.6324   (+0.0322)
+#:     customer split  PR-AUC 0.6528 -> 0.6616   (+0.0088)
+#:
+#: The serving-only model is *better* on both splits. Consistent with the memorisation finding in ``eval/splits``:
+#: cross-episode customer history is partly a handle for identifying the
+#: customer rather than signal about the decision, and the time split is where
+#: that handle pays off and then fails to generalise.
+#:
+#: (Absolute figures here are not the README's — this comparison ran at
+#: ``max_iter=200`` on both arms, against a default of 300. The delta is the
+#: measurement; the levels are not comparable across runs.)
 UNSERVABLE_COLUMNS: tuple[str, ...] = (
     "cust_prior_failures",
     "cust_prior_recoveries",
     "cust_prior_recovery_rate",
     "cust_prior_contacts",
 )
+
+
+#: Actions that raise the fatigue level for every later contact in the episode.
+#:
+#: Matches what the world actually counts: ``world.apply`` gates the revocation
+#: hazard on nudges and repair requests and increments ``contacts_made`` for
+#: those alone. The mandated pre-debit notice reaches the customer but never
+#: draws the hazard, so it creates no externality and is excluded.
+FATIGUE_ACTIONS: frozenset[str] = frozenset(
+    str(a)
+    for a in CUSTOMER_FACING_ACTIONS
+    if a is not Action.SEND_PRE_DEBIT_NOTIFICATION
+)
+
+
+def estimate_future_contacts(train: pd.DataFrame, max_k: int = 3) -> dict[int, float]:
+    """Expected further contacts in an episode, given one is taken at ``k``.
+
+    The multiplier on the fatigue externality. Taking a contact now raises
+    ``prior_contacts`` for *every* subsequent contact in the episode, so the
+    cost of incurring it is the per-contact increment times however many later
+    contacts will pay it.
+
+    Estimated, not bounded. The obvious alternative — "at most
+    ``max_contacts - contacts_made`` remain" — is wrong against this data: at
+    k=2 the budget bound says zero further contacts and the log shows 0.396,
+    because the behavioural policy that generated the log has no compliance gate
+    binding it.
+
+    **Known bias, stated rather than buried.** This is measured under the
+    behavioural exploration policy, which contacts more freely than the
+    sequencer does. It therefore over-estimates the remaining contacts a
+    *sequencer-run* episode would see, and so over-charges the externality. That
+    is the conservative direction, and given the head is already known to
+    under-slope on fatigue by about 20%, erring toward charging more for contact
+    is the defensible way to be wrong.
+    """
+    ordered = train.sort_values(["episode_id", "decision_index"])
+    is_contact = ordered["action"].isin(FATIGUE_ACTIONS)
+    by_episode = is_contact.groupby(ordered["episode_id"], observed=True)
+    remaining = by_episode.transform("sum") - by_episode.cumsum()
+
+    contacts = pd.DataFrame(
+        {
+            "k": ordered.loc[is_contact, "prior_contacts"].clip(upper=max_k),
+            "remaining": remaining[is_contact],
+        }
+    )
+    if contacts.empty:
+        return {}
+    return {
+        int(k): float(v)
+        for k, v in contacts.groupby("k", observed=True)["remaining"].mean().items()
+    }
+
+
+def estimate_passive_revocation_rate(train: pd.DataFrame) -> float:
+    """P(the customer churns on their own | this episode is never recovered).
+
+    From observable outcomes only. The simulator has a
+    ``passive_revocation_rate`` parameter and reading it would be taking the
+    generator's answer key — the deployed system has a log, not a generator.
+
+    An episode counts as passive churn when it revoked and **no row in it
+    recorded a revocation at an action**. ``close_episode`` writes its
+    settlement outcome outside the decision log, so a passive revocation leaves
+    no row of its own; 73.4% of all revoked episodes have no action to blame.
+
+    Only the passive share is returned. The action-caused share is already
+    charged through ``Candidate.marginal_revocation``, and counting it in both
+    places would inflate the value of every recovery.
+    """
+    per_episode = train.groupby("episode_id", observed=True).agg(
+        recovered=("episode_recovered", "max"),
+        revoked=("episode_revoked", "max"),
+        revoked_at_an_action=("revoked", "max"),
+    )
+    unrecovered = per_episode[per_episode["recovered"] == 0]
+    if unrecovered.empty:
+        return 0.0
+    passive = (unrecovered["revoked"] == 1) & (
+        unrecovered["revoked_at_an_action"] == 0
+    )
+    return float(passive.mean())
 
 
 def fit_for_serving(
@@ -120,10 +232,15 @@ def fit_for_serving(
     heads = TwoHeadedModel(max_iter=max_iter).fit(
         servable, order_by=order_by, group_by=group_by
     )
-    revocation = RecoveryModel(target=TARGET_REVOKED, max_iter=max_iter).fit(
+    revocation = RecoveryModel(target=TARGET_ACTION_REVOKED, max_iter=max_iter).fit(
         servable, order_by=order_by, group_by=group_by
     )
-    return ActionPricer(heads=heads, revocation=revocation)
+    return ActionPricer(
+        heads=heads,
+        revocation=revocation,
+        passive_revocation_rate=estimate_passive_revocation_rate(train),
+        future_contacts=estimate_future_contacts(train),
+    )
 
 
 #: How far ahead the sequencer will consider scheduling an action.
@@ -151,69 +268,121 @@ class Candidate:
     cost_paise: int
     revocation_cost_paise: int
 
-    baseline_recover: float
-    """P(recover) if we stop here instead. Usually near zero, not exactly."""
+    passive_revocation_rate: float = 0.0
+    """``h`` — P(the customer churns on their own | episode never recovered).
 
-    baseline_revoke: float
-    """P(revoke) if we stop here instead.
-
-    The number that makes the arithmetic honest. Customers revoke on their own:
-    the measured floor is 8.78% with no contact at all. Charging an action the
-    *full* revocation probability bills it for churn that was going to happen
-    anyway, and at a 12-cycle horizon that term is an order of magnitude larger
-    than the recovery term, so the double-count does not merely bias the answer
-    - it decides it.
+    Estimated from the training log. See
+    ``ActionPricer.passive_revocation_rate``.
     """
 
     @property
-    def expected_value_paise(self) -> float:
-        """Value of acting, measured against not acting.
+    def recovery_value_paise(self) -> float:
+        """``A + h·D`` — what one recovery is actually worth.
 
-        Both terms are marginal, because the comparison is not "act versus a
-        world where nothing happens" but "act versus stop here". Stopping does
-        not yield zero revocation; it yields the passive hazard.
+        Not the amount collected. A recovered episode is **resolved**, and
+        ``World.close_episode`` returns early on a resolved episode without
+        drawing for passive churn at all. Recovering a payment does not just
+        collect it, it removes the customer from the churn pool.
 
-        With the absolute form, ``p_revoke * 12 * amount`` at a base rate of
-        0.07 swamped ``p_recover * amount`` at 0.4, so expected value was
-        negative nearly everywhere and the sequencer stopped on 397 of 516
-        episodes - recovering 0.2306 where the naive ladder recovered 0.5155.
-        It was not being cautious. It was solving the wrong equation.
+        Measured: ``P(revoke | recovered) = 0.0000`` across 12,524 recovered
+        episodes against 0.0952 for unrecovered ones, of which the passive share
+        is 0.0700 ± 0.0016. Only the passive share is credited — the other 26.6%
+        revoked at an action and are charged separately below, so crediting the
+        full figure would count them twice and inflate every recovery by 17%.
         """
-        return (
-            (self.p_recover - self.baseline_recover) * self.value_paise
-            - self.cost_paise
-            - self.marginal_revocation * self.revocation_cost_paise
+        return int(
+            self.value_paise
+            + self.passive_revocation_rate * self.revocation_cost_paise
         )
 
     @property
-    def marginal_revocation(self) -> float:
-        """Extra revocation risk this action carries, floored at zero.
+    def revocation_charge_paise(self) -> float:
+        """``D·(1 − h)`` — what an action-caused revocation actually costs.
 
-        The floor is the load-bearing part. Left unclamped, 30.7% of candidates
-        come back *credited* for reducing revocation, and at a 12-cycle horizon
-        an observed delta of −0.0659 pays out +0.79 × amount — enough to make a
-        voice call look profitable on any episode in the book.
-
-        Those credits are not a finding, they are an artifact. In the training
-        log ``stop`` carries the highest observed revocation rate (0.1038) and
-        ``retry_same_rail`` the lowest (0.0582), because the behavioural policy
-        stops on episodes that are already lost and a stopped episode never gets
-        the chance to recover. The head learns "acting prevents revocation" from
-        selection, not from causation.
-
-        So the sequencer declines to be paid for churn it did not prevent. This
-        is a guard against a known-bad estimate, not a correction of it: the
-        underlying quantity is still unidentified, and the fix is a per-action
-        revocation label rather than a clamp.
+        Discounted by ``h`` because the counterfactual is not a customer who
+        stays forever. If the action had not been taken and the episode had gone
+        unrecovered anyway, that customer faced the passive draw regardless, so
+        charging the full ``D`` bills the action for churn it merely brought
+        forward.
         """
-        return max(0.0, self.p_revoke - self.baseline_revoke)
+        return self.revocation_cost_paise * (1.0 - self.passive_revocation_rate)
+
+    fatigue_delta: float = 0.0
+    """``p_revoke(k+1) − p_revoke(k)`` for this action, from the head itself.
+
+    Zero for anything that does not raise the fatigue level.
+    """
+
+    future_contacts: float = 0.0
+    """Expected further contacts in this episode if this one is taken."""
+
+    @property
+    def fatigue_externality_paise(self) -> float:
+        """What this contact costs the contacts that come after it.
+
+        The defect a one-step expected value cannot see. ``prior_contacts`` is
+        identical across every candidate at a decision point, so the head prices
+        *today's* fatigue level correctly and the cost of *adding* a level is
+        structurally invisible. Taking a contact now raises the revocation
+        probability of every subsequent contact in the episode, and a myopic
+        objective books none of that.
+
+        It is not a small omission. Correcting the recovery credit alone — which
+        is arithmetically right — moved contacts from 0.74 to 1.00 per episode
+        and net value from −73,367 to −159,979, because a more accurate
+        *myopic* objective simply buys more of the behaviour that makes
+        ``aggressive_contact`` the worst policy on the board.
+
+        Charged at ``D(1 − h)`` for the same reason the direct revocation term
+        is: the counterfactual is not a customer who would otherwise stay
+        forever.
+
+        Both inputs are derived rather than chosen — the increment comes from
+        the head's own prediction one fatigue level up, and the multiplier is
+        measured from the log. No tuned constant.
+        """
+        return self.fatigue_delta * self.future_contacts * self.revocation_charge_paise
+
+    @property
+    def expected_value_paise(self) -> float:
+        """Value of acting, against the counterfactual of stopping now.
+
+        Derived in closed form rather than estimated, which is the correction
+        that matters most here::
+
+            stop:  -h·D                                 one passive draw
+            act:   p_R·A - p_V·D - (1-p_R-p_V)·h·D      three exclusive branches
+            Δ   =  p_R·(A + h·D) - p_V·D·(1-h)
+
+        The previous version subtracted a *model-predicted* baseline for a STOP
+        row and clamped the difference. That is a different marginalisation, and
+        a wrong one. The ``h·D`` credit is not a baseline to subtract — it
+        belongs multiplied by ``p_recover``, because avoiding the passive draw is
+        something only a recovery achieves. Subtracting it unconditionally paid
+        that credit to actions with ``p_recover = 0``.
+
+        Two of the estimated baselines were also known constants. A STOP row
+        terminates the episode, so ``P(recover | stop)`` is exactly 0 by
+        construction (the model said 0.0006), and ``revoked`` is structurally 0
+        for STOP, both retries and the pre-debit notice (the model said
+        0.00082). The clamp guarding against negative marginals is inert under
+        the per-action label — it fires on 0.000 of contact candidates.
+
+        Sanity, all exact: ``p_R = p_V = 0`` → ``-cost`` (both branches face the
+        same draw); ``p_R = 1`` → ``A + h·D``; ``p_V = 1`` → ``-D(1-h)``.
+        """
+        return (
+            self.p_recover * self.recovery_value_paise
+            - self.p_revoke * self.revocation_charge_paise
+            - self.fatigue_externality_paise
+            - self.cost_paise
+        )
 
     def explain(self) -> str:
         return (
             f"{self.action}@{self.at:%m-%d %H:%M} "
-            f"p_rec={self.p_recover:.3f} (base {self.baseline_recover:.3f}) "
-            f"p_rev={self.p_revoke:.3f} (base {self.baseline_revoke:.3f}, "
-            f"marginal {self.marginal_revocation:.3f}) "
+            f"p_rec={self.p_recover:.3f} p_rev={self.p_revoke:.3f} "
+            f"fatigue={self.fatigue_externality_paise / 100:,.0f} "
             f"ev={self.expected_value_paise / 100:,.0f}"
         )
 
@@ -230,6 +399,18 @@ class ActionPricer:
 
     heads: TwoHeadedModel
     revocation: RecoveryModel
+    future_contacts: dict[int, float] = field(default_factory=dict)
+    """Expected further contacts by current fatigue level. See
+    ``estimate_future_contacts``."""
+
+    passive_revocation_rate: float = 0.0
+    """P(passive churn | episode never recovered), estimated from the log.
+
+    Fitted rather than hardcoded. A constant measured once at one config and
+    pasted into the source is a number that goes stale in silence — and this one
+    is multiplied by a 12-cycle horizon, so an error in it is an error in every
+    expected value the sequencer computes.
+    """
 
     def __post_init__(self) -> None:
         self._shares_encoding = _same_spec(
@@ -408,20 +589,23 @@ class Sequencer(Policy):
         # is the right verdict: a recovery orchestrator that cannot decide
         # quickly is not deployable, and raising the timeout would have hidden
         # that rather than fixed it.
-        # One do-nothing row per distinct candidate time, not one at ``now``.
+        # No STOP baseline rows. The stop counterfactual is -h*D in closed
+        # form, so predicting it was estimating a known constant: P(recover |
+        # stop) is exactly 0 because a stop terminates the episode, and
+        # `revoked` is structurally 0 on a stop row.
         #
-        # A single baseline at ``now`` looked right and was not: 84% of
-        # candidates are scheduled at some other moment, median 48 hours away,
-        # and ``_observable`` derives seven features from the timestamp. The
-        # difference being maximised was then the action effect confounded with
-        # a two-to-seven-day time shift — and the time shift is precisely what
-        # the timing head is separately choosing, so the two were fighting over
-        # the same quantity.
-        times = sorted({at for _, at in pairs})
-        baseline_at = {at: len(pairs) + i for i, at in enumerate(times)}
-        scored = pairs + [(Action.STOP, at) for at in times]
+        # What the frame *does* carry is a shadow row for every contact
+        # candidate, identical except that `prior_contacts` is one higher. The
+        # difference between a contact's prediction and its shadow is what that
+        # contact does to the fatigue level of every contact after it — the
+        # externality a one-step objective cannot otherwise see.
+        frame = self.pricer.frame(episode, pairs)
+        fatigue_rows = [i for i, (a, _) in enumerate(pairs) if str(a) in FATIGUE_ACTIONS]
+        if fatigue_rows:
+            shadow = frame.iloc[fatigue_rows].copy()
+            shadow["prior_contacts"] = shadow["prior_contacts"] + 1
+            frame = pd.concat([frame, shadow], ignore_index=True)
 
-        frame = self.pricer.frame(episode, scored)
         shared = self.pricer.encode(frame)
         if shared is None:
             p_recover = self.pricer.heads.predict_downstream(frame)
@@ -430,7 +614,18 @@ class Sequencer(Policy):
             p_recover = self.pricer.heads.downstream.predict_proba_prepared(shared)
             p_revoke = self.pricer.revocation.predict_proba_prepared(shared)
 
+        # Clamped at zero: the head's fatigue slope is a coarse step function,
+        # so an individual increment can come back slightly negative from tree
+        # quantisation. A contact making later contacts *safer* is not a finding
+        # this data supports, and paying for it would be the mirror of the
+        # revocation-credit bug.
+        fatigue_delta = {
+            row: max(0.0, float(p_revoke[len(pairs) + rank] - p_revoke[row]))
+            for rank, row in enumerate(fatigue_rows)
+        }
+
         destroyed = revocation_cost_paise(episode.cycle_amount_paise)
+        contacts_now = min(episode.contacts_made, max(self.pricer.future_contacts, default=0))
         candidates = [
             Candidate(
                 action=action,
@@ -440,8 +635,13 @@ class Sequencer(Policy):
                 value_paise=episode.cycle_amount_paise,
                 cost_paise=attempt_cost_paise(action, episode.rail),
                 revocation_cost_paise=destroyed,
-                baseline_recover=float(p_recover[baseline_at[at]]),
-                baseline_revoke=float(p_revoke[baseline_at[at]]),
+                passive_revocation_rate=self.pricer.passive_revocation_rate,
+                fatigue_delta=fatigue_delta.get(i, 0.0),
+                future_contacts=(
+                    self.pricer.future_contacts.get(contacts_now, 0.0)
+                    if i in fatigue_delta
+                    else 0.0
+                ),
             )
             for i, (action, at) in enumerate(pairs)
         ]
@@ -624,3 +824,184 @@ def _observable(episode: EpisodeView, at: dt.datetime) -> dict[str, object]:
         "mandate_repaired": episode.mandate_repaired,
         "spent_so_far_paise": episode.spent_paise,
     }
+
+
+# ==========================================================================
+# The fitted-Q policy
+# ==========================================================================
+
+
+@dataclass
+class QSequencer(Policy):
+    """Acts on a fitted Q function instead of a hand-built expected value.
+
+    Everything the expected value needed as separate machinery collapses into
+    one number here.
+
+    **Not shipped.** Across four full-scale seeds the hand-built expected value
+    beat this on 4/4 (mean gap over the fixed ladder +164,807 against +100,876),
+    and this went *negative* on one seed — losing to a three-line retry ladder.
+    It is kept as a measured negative result with a diagnosis, not as a policy.
+
+    **Stopping is not a rule.** ``Q(s, STOP)`` is an action value like any
+    other, so the policy stops when stopping is worth more than acting. The
+    threshold, the marginal baselines and the passive-churn credit all
+    disappear.
+
+    An earlier version of this docstring offered the fitted ``Q(s, STOP)`` of
+    -992 against the closed form's -1,002 as corroboration "from a completely
+    independent route". **That was wrong and the claim is withdrawn.** On every
+    nonzero stop row the logged reward *is* exactly ``-1.0 x amount x
+    LTV_HORIZON_CYCLES``, so ``Q(s, STOP)`` is definitionally the same closed
+    form with the churn rate estimated rather than supplied. Two names for one
+    computation, presented as two witnesses.
+
+    **Timing is not priced reliably.** The state carries ``decision_hour``,
+    ``days_since_failure`` and ``within_upi_window``, so in principle ``Q``
+    prices *when* and *what* together. In practice the behavioural log has a
+    hard floor at ``days_since_failure = 1.0`` — zero of 88,178 rows below it —
+    while the candidate grid starts at zero delay, so **68% of this policy's
+    decisions fall outside the training support**, in a region where the
+    booster's leftmost bin makes the feature constant. That is why it needs a
+    ``pricer``, and why the timing head it was meant to absorb is still doing
+    the work.
+
+    **The fatigue externality is not a term.** A contact's effect on later
+    contacts is exactly what a continuation value is, and it is now carried
+    there rather than bolted on with an estimated multiplier.
+
+    The gate still has the last word. Q ranks; compliance disposes.
+    """
+
+    q: FittedQ
+    pricer: ActionPricer | None = None
+    """Supplies the timing head. Without it, ``Q`` picks the moment too.
+
+    It should not. ``Q`` is fitted on logged transitions in which timing was
+    never randomised, so ``days_since_failure`` is entangled with *how many
+    attempts have already failed* — a decision seven days in is a decision that
+    follows failures. Q therefore learns "later decisions are worse" (selection)
+    rather than "waiting refills the account" (causation), and acts immediately
+    on almost everything: measured, 2,014 of 2,435 decisions scheduled at zero
+    delay, mean 1.8 hours against the behavioural log's own 79-hour median. That
+    is the ``immediate_retry`` baseline rediscovered, and it scores like it.
+
+    The timing head does not share the defect. It is trained on the immediate
+    label over collecting actions — "did this retry, at this moment, collect" —
+    which is a causal question about a single decision rather than an
+    episode-level outcome. It beats the action head on exactly that question on
+    matched rows (ROC 0.9424 vs 0.9132).
+
+    So the same discipline as the two heads applies here: each component is used
+    where it was measured to be better. The timing head picks *when*; Q picks
+    *what*, and prices the continuation that follows.
+    """
+
+    gate: ComplianceGate = field(default_factory=ComplianceGate)
+    horizon_hours: tuple[int, ...] = _HORIZON_HOURS
+    name: str = "rebound_q"
+    description: str = (
+        "Fitted Q-iteration over logged episodes; compliance-gated."
+    )
+    trail: list[dict[str, object]] = field(default_factory=list)
+
+    def reset(self) -> None:
+        self.trail.clear()
+        self.gate.audit.clear()
+
+    def decide(
+        self, episode: EpisodeView, now: dt.datetime, deadline: dt.datetime
+    ) -> Decision | None:
+        pairs = [
+            (a, t) for a, t in self._expand(episode, now, deadline) if t <= deadline
+        ]
+        pairs = self._choose_times(episode, pairs)
+        # STOP is always on the table and always permitted, so it needs no gate
+        # round-trip to be a candidate — but it does still get adjudicated when
+        # chosen, so the compliance trail records the decision to give up.
+        pairs.append((Action.STOP, now))
+
+        frame = pd.DataFrame(
+            [{**_observable(episode, at), "action": str(a)} for a, at in pairs]
+        )
+        values = self.q.predict(frame)
+        best = int(np.argmax(values))
+        action, at = pairs[best]
+
+        considered = [
+            f"{a}@{t:%m-%d %H:%M} q={v / 100:,.0f}"
+            for (a, t), v in zip(pairs, values)
+        ]
+
+        def record(chosen: Action, when: dt.datetime) -> None:
+            """Written only once the gate has ruled.
+
+            The EV sequencer shipped the other way round for a while and its
+            trail reported ``send_collect_link`` 620 times where 9 reached the
+            world. Recording the winner before adjudication makes the log a
+            record of what was *proposed*.
+            """
+            self.trail.append(
+                {
+                    "episode_id": episode.episode_id,
+                    "at": now,
+                    "chosen": str(chosen),
+                    "scheduled_for": when,
+                    "q_paise": round(float(values[best]), 2),
+                    "considered": considered,
+                }
+            )
+
+        decision = self.gate.adjudicate(Request.from_view(episode, action, at))
+        if not decision.allowed:
+            # Q ranked something the gate refuses. Stopping is the honest
+            # fallback: silently taking the runner-up would mean the recorded
+            # reason no longer matches the action.
+            self.gate.adjudicate(Request.from_view(episode, Action.STOP, now))
+            record(Action.STOP, now)
+            return Decision(
+                action=Action.STOP, at=now, reason=f"gate refused: {decision.explain()}"
+            )
+
+        record(action, at)
+        return Decision(
+            action=action,
+            at=at,
+            reason=f"Q={values[best] / 100:,.0f} over {len(pairs)} candidates",
+        )
+
+    def _choose_times(
+        self, episode: EpisodeView, pairs: list[tuple[Action, dt.datetime]]
+    ) -> list[tuple[Action, dt.datetime]]:
+        """One moment per action, chosen by the timing head where it applies.
+
+        Collapsing the grid before Q sees it is the point: Q ranks actions, not
+        moments. Without a timing head every candidate time is offered to Q and
+        it takes the earliest, for the reasons in ``pricer``.
+        """
+        if self.pricer is None:
+            return pairs
+
+        collecting = [
+            (i, a, t) for i, (a, t) in enumerate(pairs) if str(a) in COLLECTING_ACTIONS
+        ]
+        if not collecting:
+            return pairs
+
+        frame = self.pricer.frame(episode, [(a, t) for _, a, t in collecting])
+        immediate = self.pricer.heads.predict_immediate(frame)
+
+        best: dict[Action, tuple[float, dt.datetime]] = {}
+        for (_, action, at), score in zip(collecting, immediate):
+            if action not in best or score > best[action][0]:
+                best[action] = (float(score), at)
+
+        keep = [(a, t) for a, t in pairs if str(a) not in COLLECTING_ACTIONS]
+        keep.extend((action, at) for action, (_, at) in best.items())
+        return keep
+
+    # -- candidate construction, shared with the EV sequencer ---------------
+
+    _candidate_times = Sequencer._candidate_times
+    _permitted = Sequencer._permitted
+    _expand = Sequencer._expand
