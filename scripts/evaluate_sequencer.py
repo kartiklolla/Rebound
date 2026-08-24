@@ -22,13 +22,15 @@ episodes pays it ~14,000 times.
 It is for iterating and for reviewers checking *behaviour* rather than
 reproducing a number.
 
-Do not read the ranking off it. The broad conclusions survive — the sequencer
-sits behind the fixed ladder, ``aggressive_contact`` is worst, doing nothing is
-close to worst — but policies that are close together do reorder: at reduced
-scale ``disposition_rules`` comes out ahead of ``fixed_ladder``, and at full
-scale it comes out behind. Checked rather than assumed, because "the ordering
-holds" is exactly the sort of convenient claim that goes into a docstring
-unverified.
+**Do not read any conclusion off it.** Reduced scale is not a smaller version of
+this experiment — it trains a different, weaker model, and the headline inverts.
+At reduced scale the contact-enabled sequencer looks catastrophic and the
+no-contact variant wins; at full scale the contact-enabled one is the best policy
+on the board. ``disposition_rules`` likewise comes out ahead of ``fixed_ladder``
+at reduced scale and behind it at full scale.
+
+An earlier version of this note claimed "the broad conclusions survive". They do
+not, and the claim was written before anything checked it.
 
 **Every figure quoted elsewhere in this repo comes from the full run.**
 """
@@ -40,10 +42,18 @@ import sys
 
 import pandas as pd
 
+from rebound.compliance import DEFAULT_RULES, ComplianceGate, ContactCap
 from rebound.eval.baselines import default_baselines
 from rebound.eval.harness import build_eval_batch, evaluate_all
 from rebound.eval.splits import all_splits
-from rebound.sequencer import UNSERVABLE_COLUMNS, Sequencer, fit_for_serving
+from rebound.model import TARGET_ACTION_REVOKED
+from rebound.fqi import fit_fitted_q
+from rebound.sequencer import (
+    UNSERVABLE_COLUMNS,
+    QSequencer,
+    Sequencer,
+    fit_for_serving,
+)
 from rebound.sim.dataset import GenerationConfig, generate_log
 from rebound.sim.world import World
 
@@ -83,9 +93,13 @@ def main() -> None:
 
     pricer = fit_for_serving(train, max_iter=FIT_ITERATIONS)
     print(f"servable features: {len(pricer.heads.downstream.spec_.columns)}")
+    # The head is fitted on `revoked`, not `episode_revoked`. This line printed
+    # the latter after the target moved, overstating the base rate 13x on the
+    # one line that reports the thing that changed.
     print(
-        f"revocation head calibrated by {pricer.revocation.calibration_method_used_}; "
-        f"base rate {train['episode_revoked'].mean():.4f}"
+        f"revocation head ({TARGET_ACTION_REVOKED}) calibrated by "
+        f"{pricer.revocation.calibration_method_used_}; "
+        f"base rate {train[TARGET_ACTION_REVOKED].mean():.5f}"
     )
 
     banner("BUILDING THE EVALUATION BATCH")
@@ -108,7 +122,44 @@ def main() -> None:
     print(f"{len(batch):,} failed debits")
 
     banner("CLAIM B — POLICIES UNDER IDENTICAL CONDITIONS")
-    policies = list(default_baselines()) + [Sequencer(pricer=pricer)]
+
+    # Two configurations of the same sequencer, and both are reported.
+    #
+    # The full one is allowed to contact customers and prices that contact with
+    # the learned revocation head. The conservative one has the contact cap set
+    # to zero, so it can only retry, switch rail, repair a mandate or stop.
+    #
+    # Reporting only the winner would be fitting the policy to the scoreboard.
+    # The pair is the finding: the difference between them is the price of
+    # trusting a revocation estimate that observational logs cannot identify.
+    full = Sequencer(pricer=pricer)
+    full.name = "rebound_sequencer"
+
+    no_contact_rules = tuple(
+        ContactCap(max_contacts=0) if isinstance(rule, ContactCap) else rule
+        for rule in DEFAULT_RULES
+    )
+    conservative = Sequencer(
+        pricer=pricer, gate=ComplianceGate(rules=no_contact_rules)
+    )
+    conservative.name = "rebound_sequencer_no_contact"
+
+    # The fitted-Q policy. Ranks actions by total remaining value rather than a
+    # hand-built one-step expected value, which is what removes the credit that
+    # the EV double-counts across the decisions of a single episode.
+    #
+    # It takes the *timing head* from the same pricer. Q is fitted on logged
+    # transitions where timing was never randomised, so it confuses "later
+    # decisions are worse" with "waiting is worse" and acts immediately on
+    # everything; the timing head answers the causal question directly.
+    q = fit_fitted_q(train, sweeps=8)
+    learned = QSequencer(q=q, pricer=pricer)
+    learned.name = "rebound_q"
+
+    untimed = QSequencer(q=q, pricer=None)
+    untimed.name = "rebound_q_untimed"
+
+    policies = list(default_baselines()) + [full, conservative, learned, untimed]
 
     # The default 120s budget was written for rule baselines that decide in
     # microseconds. A model-driven policy is legitimately slower, and the
@@ -150,15 +201,27 @@ def main() -> None:
     if QUICK:
         print("\n  (quick mode — reduced scale, not the reported figures)")
 
-    ladder = table.loc[table["policy"] == "fixed_ladder"]
-    seq = table.loc[table["policy"] == "rebound_sequencer"]
-    if not ladder.empty and not seq.empty:
-        base = float(ladder["net_per_1000"].iloc[0])
-        ours = float(seq["net_per_1000"].iloc[0])
+    def net_of(name: str) -> float | None:
+        row = table.loc[table["policy"] == name]
+        return None if row.empty else float(row["net_per_1000"].iloc[0])
+
+    base = net_of("fixed_ladder")
+    ours = net_of("rebound_sequencer")
+    learned_q = net_of("rebound_q")
+    if base is not None and ours is not None:
         banner("AGAINST THE PRODUCTION-STANDARD LADDER")
-        print(f"  fixed_ladder      {base:>12,.0f}")
-        print(f"  rebound_sequencer {ours:>12,.0f}")
-        print(f"  difference        {ours - base:>12,.0f}")
+        print(f"  fixed_ladder                  {base:>12,.0f}")
+        print(f"  rebound_sequencer             {ours:>12,.0f}")
+        print(f"  difference                    {ours - base:>12,.0f}")
+        if learned_q is not None:
+            print(f"\n  fitted Q-iteration:           {learned_q:>12,.0f}")
+            print(
+                "  Q is reported, not shipped. Across four full-scale seeds the\n"
+                "  hand-built expected value beat it 4/4 (mean gap over the ladder\n"
+                "  +164,807 vs +100,876), and Q went negative on one seed. See\n"
+                "  rebound.fqi for why: 68% of its decisions fall outside the\n"
+                "  training support on days_since_failure."
+            )
         # No percentage. Both figures can be negative, and a ratio of two
         # negatives reads as a gain when the second is worse than the first.
         print(
