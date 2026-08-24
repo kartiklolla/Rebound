@@ -103,16 +103,28 @@ class Transitions:
     """True where the episode was *cut off* rather than ended.
 
     A last row that neither collected, nor lost the mandate, nor chose to stop
-    is the generator's ``max_ladder_steps`` ceiling, not an outcome. Measured:
-    12,973 of 24,514 last rows (52.9%), overwhelmingly at ``decision_index``
-    4. They still carry the passive-churn charge, because ``close_episode``
-    genuinely ran — but treating them as evidence that acting ends badly
-    conflates "the ladder ran out of budget" with "the episode was lost".
+    was cut off rather than concluded. Measured: 12,973 of 24,514 last rows
+    (52.92% ± 0.32%). They still carry the passive-churn charge, because
+    ``close_episode`` genuinely ran — but treating them as evidence that acting
+    ends badly conflates "the run was cut short" with "the episode was lost".
 
-    Reported rather than corrected. The training log allows five decisions and
-    the evaluation harness allows eight (``DEFAULT_MAX_STEPS``), so 3.1% of
-    rollout decisions occur at ``prior_actions`` values with **zero** training
-    rows. Aligning the two is the fix; a flag is not."""
+    **Two different cut-offs, and an earlier version of this docstring claimed
+    they were one.** It said these were "overwhelmingly" the ``max_ladder_steps``
+    ceiling. Decomposed:
+
+    - 9,284 (71.56% ± 0.40%) at ``decision_index`` 4 — the step budget.
+    - 3,689 (28.44% ± 0.40%) earlier, at mean ``days_since_failure`` 22.4 and a
+      maximum of exactly 28.00 — the **recovery window closing**, not the budget.
+
+    The second group is arguably a legitimate ending: the merchant ran out of
+    month, not out of patience. Only the first is an artifact.
+
+    Diagnostic only — nothing in the decision path reads this. It is here
+    because the induction silently treats both as terminal, and because the
+    training log allows five decisions where the evaluation harness allows eight
+    (``DEFAULT_MAX_STEPS``), so 3.1% of rollout decisions occur at
+    ``prior_actions`` values with **zero** training rows. Aligning the generator
+    and the harness is the fix; a flag is not."""
 
     failure_code: np.ndarray
     """Per row, so the continuation max can be restricted to legal actions."""

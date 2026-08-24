@@ -12,11 +12,18 @@ baselines. No special path, no privileged information.
 
 Expected value, not recovery rate
 ---------------------------------
-The instinct is to maximise recovery. The baselines already show where that
-leads: ``aggressive_contact`` recovers more debits than the naive ladder and
-destroys ₹346,088 per thousand doing it, because every contact carries
-revocation risk and recovery rate does not charge for it. It is the worst policy
-in the table *and* it wins the metric merchants usually watch.
+The instinct is to maximise recovery. The baselines show where that leads:
+``aggressive_contact`` contacts 3.62 times per episode, drives revocation from
+the ladder's 0.0460 to 0.1328, and destroys **₹1,941,482 per thousand** against
+the ladder's ₹700,439 — the worst net on the board by a wide margin.
+
+An earlier version of this paragraph claimed it "recovers more debits than the
+naive ladder" and "wins the metric merchants usually watch". **Both are false.**
+It recovers **0.3069 against the ladder's 0.4561** — it recovers *less*, because
+it retries exactly once (``baselines.py``) and spends the rest of its budget on
+contact. The ₹346,088 was a stale figure from a different metric and config. The
+real lesson is narrower and still holds: contact is expensive, and a policy that
+does not charge for it loses money.
 
 So each candidate is priced against the counterfactual of stopping now, in
 closed form:
@@ -26,7 +33,9 @@ closed form:
        − cost(action)
 
 where ``h`` is P(the customer churns on their own | this episode is never
-recovered), estimated from the log at 0.0700 ± 0.0016.
+recovered). Estimated at fit time from the *training* split, where it is
+0.0741 ± 0.0021 — not the 0.0700 ± 0.0016 of the full log, which is what
+``fit_for_serving`` never sees.
 
 The third term is why there is a revocation head at all. Without it the
 sequencer optimises the same quantity ``aggressive_contact`` optimises, and
@@ -46,8 +55,9 @@ The heads are used where each was measured to be better, rather than blended
 into a single number that neither supports.
 
 **When** is chosen by the timing head, which predicts immediate success and
-beats the action head on that question on matched rows (ROC 0.9424 against
-0.9132). Retry success against insufficient funds runs 0.65 near payday and 0.22
+beats the action head on that question on matched rows (ROC 0.9282 ± 0.0018
+against 0.8996 ± 0.0022, on 22,863 matched collecting rows at the ``max_iter``
+this module actually fits with). Retry success against insufficient funds runs 0.65 near payday and 0.22
 three weeks later — a spread the episode-level label washes out.
 
 **What** is priced by the action head, which predicts whether the episode
@@ -284,11 +294,17 @@ class Candidate:
         drawing for passive churn at all. Recovering a payment does not just
         collect it, it removes the customer from the churn pool.
 
-        Measured: ``P(revoke | recovered) = 0.0000`` across 12,524 recovered
-        episodes against 0.0952 for unrecovered ones, of which the passive share
-        is 0.0700 ± 0.0016. Only the passive share is credited — the other 26.6%
-        revoked at an action and are charged separately below, so crediting the
-        full figure would count them twice and inflate every recovery by 17%.
+        Measured on the full log: ``P(revoke | recovered) = 0.0000`` across 12,524
+        recovered episodes against 0.0952 for unrecovered ones, of which the
+        passive share is 0.0700 ± 0.0016. Only the passive share is credited —
+        the other 26.6% revoked at an action and are charged separately below, so
+        crediting the full figure would count them twice and inflate every
+        recovery by 16.5%.
+
+        The figure the running system uses is the *training-split* estimate,
+        0.0741 ± 0.0021. These docstrings quote the full log because that is
+        where the mechanism was established; ``fit_for_serving`` fits on train
+        alone and never sees it.
         """
         return int(
             self.value_paise
@@ -890,7 +906,7 @@ class QSequencer(Policy):
     label over collecting actions — "did this retry, at this moment, collect" —
     which is a causal question about a single decision rather than an
     episode-level outcome. It beats the action head on exactly that question on
-    matched rows (ROC 0.9424 vs 0.9132).
+    matched rows (ROC 0.9282 vs 0.8996 at the fitted ``max_iter=200``).
 
     So the same discipline as the two heads applies here: each component is used
     where it was measured to be better. The timing head picks *when*; Q picks
@@ -933,13 +949,19 @@ class QSequencer(Policy):
             for (a, t), v in zip(pairs, values)
         ]
 
-        def record(chosen: Action, when: dt.datetime) -> None:
+        def record(chosen: Action, when: dt.datetime, value: float) -> None:
             """Written only once the gate has ruled.
 
             The EV sequencer shipped the other way round for a while and its
             trail reported ``send_collect_link`` 620 times where 9 reached the
             world. Recording the winner before adjudication makes the log a
             record of what was *proposed*.
+
+            ``value`` is passed rather than closed over. An earlier version
+            captured ``values[best]``, so on the refusal path it wrote a row
+            reading ``chosen="stop"`` carrying the Q of the action the gate had
+            just refused — off by ₹1,053 on the reproduction, always in the
+            direction of making stopping look better than it was.
             """
             self.trail.append(
                 {
@@ -947,23 +969,33 @@ class QSequencer(Policy):
                     "at": now,
                     "chosen": str(chosen),
                     "scheduled_for": when,
-                    "q_paise": round(float(values[best]), 2),
+                    "q_paise": round(float(value), 2),
                     "considered": considered,
                 }
             )
 
+        # Defence in depth that currently never fires. Every candidate reaching
+        # here was cleared by `_expand` under the same rules at the same moment,
+        # and every rule in DEFAULT_RULES is a pure function of the Request — so
+        # re-asking gets the same answer. Measured: 0 refusals in 414,735 pairs.
+        #
+        # Kept rather than deleted because the invariant it protects is "nothing
+        # executes unadjudicated", and that has to survive a future rule that
+        # reads mutable state (a spend counter, a daily contact budget) where
+        # asking twice would legitimately differ. It is unreachable today, so
+        # the branch below is untested in situ and the tests that exercise it
+        # have to force a refusal.
         decision = self.gate.adjudicate(Request.from_view(episode, action, at))
         if not decision.allowed:
-            # Q ranked something the gate refuses. Stopping is the honest
-            # fallback: silently taking the runner-up would mean the recorded
-            # reason no longer matches the action.
+            # Stopping is the honest fallback: silently taking the runner-up
+            # would mean the recorded reason no longer matches the action.
             self.gate.adjudicate(Request.from_view(episode, Action.STOP, now))
-            record(Action.STOP, now)
+            record(Action.STOP, now, float(values[-1]))
             return Decision(
                 action=Action.STOP, at=now, reason=f"gate refused: {decision.explain()}"
             )
 
-        record(action, at)
+        record(action, at, float(values[best]))
         return Decision(
             action=action,
             at=at,

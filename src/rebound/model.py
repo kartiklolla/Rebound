@@ -50,8 +50,52 @@ TARGET_DOWNSTREAM = "episode_recovered"
 TARGET_IMMEDIATE = "succeeded"
 """Did this action collect the money right now. Answers *when*."""
 
-TARGET_REVOKED = "episode_revoked"
-"""Did the customer revoke the mandate. Answers *what it costs to be wrong*.
+TARGET_ACTION_REVOKED = "revoked"
+"""Did the customer revoke in response to *this action*. Answers *what it costs*.
+
+The third instance of the same distinction that produced the two heads, and the
+one that broke the sequencer before it was found. ``episode_revoked`` is an
+episode-level label smeared across every row, so a model trained on it learns
+which *episodes* revoke rather than which *actions* cause revocation — and the
+behavioural policy stops on episodes already lost, so it reads ``stop`` as the
+most dangerous action in the book:
+
+    action              revoked   episode_revoked
+    voice_call           0.0205            0.0895
+    nudge_sms            0.0074            0.0736
+    retry_same_rail      0.0000            0.0562
+    stop                 0.0000            0.0802
+
+(Regenerated from ``GenerationConfig(n_customers=6000, start=2025-01-01,
+end=2026-03-31, seed=20260821)``. An earlier version of this table was quoted
+from a reduced-scale log and overstated ``voice_call`` by 70%; the ordering held
+but the numbers did not, and on a small enough log the inversion it describes
+fails entirely.)
+
+The per-action column has the ordering the domain actually has: a voice call is
+the most intrusive thing available and carries real revocation risk, a retry
+cannot cause a revocation at all, and stopping causes nothing because it does
+nothing. The episode-level column inverts it.
+
+Two known limitations, both measured, neither resolved:
+
+**It is blind to passive churn.** ``revoked`` is written only from
+``world.apply``; ``close_episode``'s passive revocation is never a row. So
+**73.4% of revoked episodes (1,698 of 2,312) have no action to blame** and are
+invisible to this label. That is correct for *pricing an action* — passive churn
+is not attributable to any action — but it means this column is not an estimate
+of total revocation risk and must not be read as one.
+
+**It is flat where the world is steep.** Revocation hazard compounds at
+``revocation_fatigue_growth ** contacts_made`` (1.45 per contact). A per-action
+label carries no memory of that, so the head charges roughly the same for the
+third contact as the first. Measured against a paired counterfactual, it prices
+three voice calls at 0.0225 where the world charges 0.0710 — **under-priced
+3.1x**. ``nudge_sms`` is out by 1.4x; ``nudge_email`` is about right.
+"""
+
+TARGET_EPISODE_REVOKED = "episode_revoked"
+"""Whether the episode ended in revocation. Kept for reporting, not for pricing.
 
 Predicting recovery is only half of an expected value. The measured baseline
 result is that ``aggressive_contact`` recovers less than a naive ladder while
@@ -59,6 +103,8 @@ pushing revocation from 6.00% to 14.54%, destroying more value than abandoning
 every failed debit — so a sequencer that can price recovery but not revocation
 optimises the exact quantity that produced the worst policy in the table, and
 does it while looking locally correct at every step.
+
+Do not price actions with this. See ``TARGET_ACTION_REVOKED``.
 """
 
 TARGET = TARGET_DOWNSTREAM
