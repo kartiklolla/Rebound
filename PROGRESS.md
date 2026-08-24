@@ -21,7 +21,8 @@
 | 07 | Two-headed model (timing + action) | ✅ done — 385 tests |
 | 07a | **Independent audit of the model layer + fixes** | ✅ done — 6 findings fixed, 387 tests |
 | 08 | Compliance gate (non-bypassable) | ✅ done — 9 rules, reviewed, 434 tests |
-| 09 | Sequencer / agent policy | ✅ built, reviewed — **loses to the ladder**, diagnosed |
+| 09 | Sequencer / agent policy | ✅ done — beats the ladder 4/4 seeds |
+| 09a | Fitted Q-iteration | ✅ built, measured, **not shipped** — diagnosed |
 | 10 | LLM comms layer (Hinglish/multilingual) | ⬜ not started |
 | 11 | Batch runner + demo dashboard | ⬜ not started |
 | 12 | README, metrics writeup, provenance table | ⬜ not started |
@@ -498,6 +499,98 @@ points, every field value-compared against the training-time builder - and the
 test that was supposed to guarantee that was a subset check on column *names*
 that would have passed if the serving path dropped half its features. It now
 compares values.
+
+### D25 - The EV double-counts across decisions, and fixing it properly did not help (2026-08-24)
+
+`p_recover` is the downstream head - P(episode recovers | this action) - so it
+already contains everything that happens *after* the action. In a three-decision
+episode all three decisions are credited with the same recovery: the nudge is
+credited for the retry that follows it, then the retry is credited again.
+
+That is why correcting the recovery coefficient to its true 1.84x made the policy
+**worse** (net -73,367 to -159,979, contacts 0.74 to 1.00). It amplified a term
+already counted several times. No coefficient fixes it.
+
+The closed-form derivation is correct arithmetic for a decision that **ends the
+episode**. Episodes do not end. There is no term in it for "and then I decide
+again", and that missing term is the whole problem.
+
+### D26 - Fitted Q-iteration: the right method, the wrong data (2026-08-24)
+
+Built it properly: rewards from the ledger (reconciling exactly with
+`episode_net_paise`), backward induction, double-Q on episode-atomic partitions,
+pessimistic combination.
+
+**It lost.** Across four full-scale seeds the hand-built expected value beat it
+4/4 - mean gap over the ladder +164,807 against +100,876 - and Q went *negative*
+on one seed, losing to a three-line retry ladder.
+
+| seed | rebound_q | rebound_sequencer |
+|---|---:|---:|
+| 12345 | +283,783 | **+297,047** |
+| 24680 | **-42,116** | +117,474 |
+| 31415 | +113,240 | **+168,457** |
+| 55555 | +48,598 | **+76,248** |
+
+The diagnosis is specific and is the useful part. `EXPLORATION_WEIGHTS`
+randomised *actions*; nothing randomised *timing*. The behavioural log has a hard
+floor at `days_since_failure = 1.0` - **zero of 88,178 rows below it** - while
+the candidate grid starts at zero delay. So **68% of the Q policy's decisions
+fall outside the training support**, in a region where the booster's leftmost bin
+makes the feature constant. Without a timing head it schedules 82.7% of decisions
+at zero delay and becomes `immediate_retry` with extra machinery.
+
+Two more the data cannot support: **53% of last rows are the generator's step
+budget running out**, not an ending, each carrying a full twelve-cycle churn
+charge with no continuation - so induction propagates "episodes end badly"
+backwards. And the training log allows five decisions where the harness allows
+eight, so 3.1% of rollout decisions sit at `prior_actions` values with zero
+training rows.
+
+Fitted-Q is not a detour. It is the correct method applied to a log built to
+answer a different question, and the fix is a generator that randomises timing -
+not a better regressor.
+
+### D27 - Three failures of my own worth recording (2026-08-24)
+
+**I reported a headline from a batch too small to resolve it.** +67,914 on ~1,700
+episodes, where one extra revoked episode moves the figure by ~45,000. The gap I
+quoted was inside the noise, and at full scale it inverted.
+
+**I claimed a circular result as independent corroboration, twice.** That fitted
+Q learned `Q(stop) = -992` against the closed form's -1,002 "from a completely
+independent route". On every nonzero stop row the logged reward *is* exactly
+`-1.0 x amount x LTV_HORIZON_CYCLES`, so `Q(s,STOP)` is definitionally that same
+closed form with the rate estimated rather than supplied. One computation
+presented as two witnesses, offered as validation of precisely the thing it could
+not validate.
+
+**My tests did not test the algorithm.** The entire 480-test suite passed with
+backward induction disabled. Six of fifteen new tests could not fail at all - one
+passed with the timing head replaced by a constant, another with passive churn
+attached to the *first* decision instead of the last. Now verified by mutation:
+seven mutations, each caught.
+
+One test deliberately does not assert the direction I expected.
+`test_backward_induction_moves_the_values` was first written expecting induction
+to *raise* the value of a nudge, since a nudge collects nothing and only a
+continuation can justify it. Measured, induction lowers it, because of the
+truncation charge above. Asserting the expected direction would have meant
+deleting a true finding to keep a comfortable test.
+
+### D28 - Ten looks at one metric, and the held-out protocol (2026-08-24)
+
+Roughly ten policy variants have now been compared on the same evaluation:
+absolute EV, marginal-vs-stop, baseline-per-time, clamped, closed-form,
+plus-externality, naive Q, double-Q, pessimistic Q, timing-hybrid Q. Each time
+the better-scoring one was kept.
+
+The seed standard deviation on that metric is ~96,000. Ten looks is ten chances
+to get lucky, and nothing in the project protected against it - every other
+selection decision here is split-protected, and policy selection was not.
+
+So Claim B is re-measured on five seeds that selection never touched
+(`runs/holdout.py`). Whatever they say is the number that gets published.
 
 ## Evaluation splits
 

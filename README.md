@@ -162,41 +162,184 @@ every one of them had been making the model quietly worse while the tests report
 
 ### Claim B — policy vs baselines
 
-**The sequencer recovers more than any baseline and still loses on net value.**
-Reported as measured.
+**Measured on five world seeds that policy selection never touched.** Full
+scale, ~6,900 failed debits per seed, paired random draws.
 
-| Policy | Recovery | Revocation | Contacts/ep | Net ₹/1000 |
-|---|---:|---:|---:|---:|
-| `fixed_ladder` | 0.5155 | 0.0465 | 0.00 | **+12,287** |
-| `immediate_retry` | 0.4516 | 0.0484 | 0.00 | −80,274 |
-| **`rebound_sequencer`** | **0.6279** | 0.0581 | 1.09 | −126,859 |
-| `disposition_rules` | 0.4632 | 0.0601 | 0.80 | −174,909 |
-| `no_recovery` | 0.0000 | 0.0950 | 0.00 | −1,085,275 |
-| `aggressive_contact` | 0.3585 | 0.1415 | 3.56 | −1,176,290 |
+| Policy | Recovery | Revocation | Contacts/ep | Net ₹/1000 | Gap vs ladder |
+|---|---:|---:|---:|---:|---:|
+| **`rebound_sequencer`** | **0.540** | 0.052 | 0.95 | −97,278 | **+56,787** |
+| `fixed_ladder` | 0.458 | 0.048 | 0.00 | −154,065 | — |
+| `immediate_retry` | 0.407 | 0.052 | 0.00 | −271,976 | −117,911 |
+| `disposition_rules` | 0.428 | 0.061 | 0.90 | −369,653 | −215,588 |
+| `no_recovery` | 0.000 | 0.088 | 0.00 | −1,274,866 | −1,120,801 |
+| `aggressive_contact` | 0.306 | 0.133 | 3.62 | −1,516,667 | −1,362,603 |
 
-It over-contacts, and the reason is identified rather than guessed at: **the
-revocation head's marginal estimate has the wrong sign.** Across every action,
-`p_revoke(action) − p_revoke(stop)` is negative — the model says contacting a
-customer makes them *less* likely to revoke.
+Gap over the ladder, per seed: **+11,992 / +38,466 / +59,435 / +73,236 /
++100,804**. Mean **+56,787**, sd 33,754, **positive on 5 of 5**.
 
-The training log shows why. `stop` carries the highest observed revocation rate
-(0.1038), `retry_same_rail` the lowest (0.0582), because the behavioural policy
-stops on episodes that are already lost and a stopped episode never gets the
-chance to recover. "Stop causes revocation" is selection, not causation, and the
-sequencer read it causally.
+**Every net figure is negative, the ladder's included.** "Ahead" means less bad,
+not profitable. These are simulator rupees — read the ordering, not the
+magnitudes.
 
-This is the same error as the label bug that shaped the two-headed model, in a
-new place: **an episode-level label cannot identify a single action's causal
-effect.** Every row in an episode carries the same `episode_revoked`, so the head
-learned which *episodes* get which actions rather than what an action does.
-Fixing it needs a per-action revocation label or interventional data.
+### Why these seeds and not the earlier ones
 
-Lowering the contact cap to 1 would make this table green. That is fitting the
-policy to the scoreboard while the mechanism stays broken, and it was not done.
+Roughly ten policy variants were compared during development on a fixed set of
+five seeds. Ten looks at a metric whose seed standard deviation is ~34,000 is ten
+chances to get lucky, and nothing in the project protected against that — every
+other selection decision here is split-protected, and policy selection was not.
 
-The baseline floor stands: recovering payments cuts revocation from 9.50%
-(abandon everything) to 4.65% (retry ladder), while chasing relentlessly pushes
-it to 14.15% and destroys more value than doing nothing.
+So Claim B was re-measured on five seeds selection had never seen. It cost the
+headline most of its size:
+
+| | mean gap | min | seeds won |
+|---|---:|---:|---:|
+| Selection seeds | +164,807 | +76,248 | 4/4 |
+| **Held-out seeds** | **+56,787** | **+11,992** | **5/5** |
+
+**The selection-set figure was inflated about 2.9×.** The direction survived and
+the magnitude did not, which is the outcome this protocol exists to detect. The
+held-out number is the one reported.
+
+### What Claim B is not
+
+**Not a claim that fitted Q-iteration works here.** It was built properly —
+ledger-derived rewards reconciling exactly with `episode_net_paise`, backward
+induction, double-Q on episode-atomic partitions, pessimistic combination — and
+it **lost**. Across four full-scale seeds the hand-built expected value beat it
+4/4, and Q went *negative* on one, losing to a three-line retry ladder.
+
+The diagnosis is the useful part. `EXPLORATION_WEIGHTS` randomised *actions*;
+nothing randomised *timing*. The log has a hard floor at `days_since_failure =
+1.0` — zero of 88,178 rows below it — while the candidate grid starts at zero
+delay, so **68% of that policy's decisions fall outside the training support**.
+Fitted-Q is the correct method applied to a log built to answer a different
+question, and the fix is a generator that randomises timing, not a better
+regressor. See `rebound.fqi`.
+
+**Not converged in training scale.** Holding the world seed fixed and varying
+only the training log, the gap moves non-monotonically and was still moving at
+6,000 customers.
+
+**Not free of pricing error.** The policy under-prices a voice call by about 3×
+relative to the world's compounding contact fatigue, and the expected value
+credits every decision in an episode with the whole episode's recovery — the
+defect fitted-Q was built to remove. Both are open and quantified.
+
+### What review found in the evaluation itself
+
+The sequencer's first reported result was **+100.0% over the fixed ladder**, for
+a policy that had crashed. It exceeded the harness's 120-second budget after
+2,001 of 6,898 episodes; `evaluate_all` isolates a failed policy and substitutes
+an all-zero report; zero revocation and zero contacts then sorted that row to the
+top of a table ordered by net value; and a lift computed against a negative
+baseline turned "did nothing at all" into a gain. The failure notice printed one
+line above the table that contradicted it.
+
+No single piece of that was a bug. Sorting by net value, isolating crashes so one
+bad policy does not destroy a half-hour run, and expressing lift as a ratio are
+all reasonable. They composed into a fabricated headline. The script now refuses
+to tabulate an incomplete run at all, and reports a difference rather than a
+ratio.
+
+### What a second audit found
+
+The model layer was audited independently after it was built, by an agent with no access
+to the reasoning that produced it. Six defects, four in code rather than prose, all fixed
+and all with regression tests:
+
+- **The calibrator was selected under the wrong generalisation regime.** The inner
+  calibration split was always temporal, even when the outer split held out whole
+  customers — so on the customer split the calibrator was chosen on people the booster had
+  already memorised, then applied to strangers. It confidently picked isotonic, which was
+  worse on *every* held-out metric and cost 0.013 PR-AUC. The inner split now mirrors the
+  outer one. Customer-split ECE went 0.0079 → 0.0035 and calibration stopped costing any
+  discrimination.
+- **Two features were byte-identical.** `decision_index` was documented as an identifier
+  but never added to the identifier set, so it reached the model as a twin of
+  `prior_attempts`. Permutation importance shuffles one column at a time, so each twin
+  masked the other and the published ranking was measured wrong.
+- **Two tests asserted things that could not fail.** One checked that a sorted column was
+  sorted; another re-derived a slice using the same arithmetic it was meant to be
+  checking. Both passed while the defect they were named for was present in the data.
+- **The two-head comparison was not like-for-like** — corrected above.
+- **Excluding `customer_id` does not prevent customer memorisation.** The tuple
+  `(bank, billing_day, amount, ceiling, rail)` is unique across all 5,974 customers, and
+  no allowlist can drop it without dropping five legitimate features. Quantified in
+  `eval/splits.py`, and it is the reason the customer split is reported at all.
+
+The four code defects moved the headline numbers *up*, which is the part worth noticing:
+every one of them had been making the model quietly worse while the tests reported green.
+
+### Claim B — policy vs baselines
+
+**Measured on five world seeds that policy selection never touched.** Full
+scale, ~6,900 failed debits per seed, paired random draws.
+
+| Policy | Recovery | Revocation | Contacts/ep | Net ₹/1000 | Gap vs ladder |
+|---|---:|---:|---:|---:|---:|
+| **`rebound_sequencer`** | **0.540** | 0.052 | 0.95 | −97,278 | **+56,787** |
+| `fixed_ladder` | 0.458 | 0.048 | 0.00 | −154,065 | — |
+| `immediate_retry` | 0.407 | 0.052 | 0.00 | −271,976 | −117,911 |
+| `disposition_rules` | 0.428 | 0.061 | 0.90 | −369,653 | −215,588 |
+| `no_recovery` | 0.000 | 0.088 | 0.00 | −1,274,866 | −1,120,801 |
+| `aggressive_contact` | 0.306 | 0.133 | 3.62 | −1,516,667 | −1,362,603 |
+
+Gap over the ladder, per seed: **+11,992 / +38,466 / +59,435 / +73,236 /
++100,804**. Mean **+56,787**, sd 33,754, **positive on 5 of 5**.
+
+**Every net figure is negative, the ladder's included.** "Ahead" means less bad,
+not profitable. These are simulator rupees — read the ordering, not the
+magnitudes.
+
+### Why these seeds and not the earlier ones
+
+Roughly ten policy variants were compared during development on a fixed set of
+five seeds. Ten looks at a metric whose seed standard deviation is ~34,000 is ten
+chances to get lucky, and nothing in the project protected against that — every
+other selection decision here is split-protected, and policy selection was not.
+
+So Claim B was re-measured on five seeds selection had never seen. It cost the
+headline most of its size:
+
+| | mean gap | min | seeds won |
+|---|---:|---:|---:|
+| Selection seeds | +164,807 | +76,248 | 4/4 |
+| **Held-out seeds** | **+56,787** | **+11,992** | **5/5** |
+
+**The selection-set figure was inflated about 2.9×.** The direction survived and
+the magnitude did not, which is the outcome this protocol exists to detect. The
+held-out number is the one reported.
+
+### What Claim B is not
+
+Three things the number above does not support, stated because each was
+initially believed here and had to be withdrawn.
+
+**"Contact is profitable" is not established.** Paired per seed, enabling contact
+is worth +51,550 on average (sd 43,250) but **wins only 4 of 5 seeds**, t=2.67 on
+4 df, p≈0.056. On one seed the no-contact configuration wins. Both
+configurations are shipped and both are reported; the gap between them is the
+price of trusting a revocation estimate this data cannot identify.
+
+**The result has not converged in training scale.** Holding the world seed
+fixed and varying only the training log:
+
+| Gap over ladder | 1,200 | 3,000 | 6,000 |
+|---|---:|---:|---:|
+| `rebound_sequencer` | +66,442 | +57,845 | +99,516 |
+| `rebound_sequencer_no_contact` | +69,119 | +21,223 | +22,922 |
+
+Non-monotonic, still moving ~+42k between 3,000 and 6,000, and **at 1,200 the
+ordering of the two configurations inverts.** A reduced-scale run is not a small
+version of this experiment — it is a different, weaker model.
+
+**Two pricing errors partially cancel.** The policy under-prices a voice call by
+about 3× (contact fatigue compounds at 1.45^contacts in the world, and the
+per-action label is flat in `prior_contacts`), and under-values a recovery by
+about 2× (a recovered episode is immune to passive churn, worth ~2.01× the
+amount rather than 1×). They point in opposite directions. The policy is
+therefore partly right for the wrong reasons, and both errors are open work
+rather than resolved.
 
 ## The compliance gate
 
