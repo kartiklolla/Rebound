@@ -14,6 +14,13 @@ dependencies = [
 dev = [
     "pytest>=8.0",
 ]
+# The comms layer runs without this. TemplateDrafter needs no network and the
+# whole test suite exercises the desk against a stub client, so a reviewer can
+# run everything — including the red-team evaluation — with no API key and no
+# account. Only scripts/evaluate_comms.py --model needs it.
+llm = [
+    "anthropic>=0.40",
+]
 
 [build-system]
 requires = ["hatchling"]
