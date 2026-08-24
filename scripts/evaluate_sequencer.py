@@ -12,9 +12,9 @@ not a real-world forecast — see the README's honest-scope section.
 On ``--quick``
 --------------
 The full run costs about seven minutes, and nearly all of it is per-decision
-model inference: a ``predict_proba`` call costs ~14.6ms whether the frame holds
-1 row or 1,000, because the cost is sklearn's encode-and-dispatch overhead
-rather than tree traversal. It therefore scales with the number of *decisions*,
+model inference: a ``predict_proba`` call costs about the same for 1 row as for
+100 (measured 11.8ms and 11.7ms; 1,000 rows is 15.9ms, 35% more), because most
+of it is sklearn's encode-and-dispatch overhead rather than tree traversal. It therefore scales with the number of *decisions*,
 not the amount of data, and a policy that decides twice per episode over 6,898
 episodes pays it ~14,000 times.
 

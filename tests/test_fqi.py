@@ -327,3 +327,30 @@ def test_pessimism_actually_lowers_something(fitted, log):
 def test_an_unfitted_model_refuses_to_predict():
     with pytest.raises(RuntimeError, match="not fitted"):
         FittedQ().predict(pd.DataFrame({"action": ["stop"]}))
+
+
+def test_the_shipped_default_is_pessimistic():
+    """The mutation the suite missed: flipping the dataclass default ships mean
+    instead of min silently, because every other test sets `pessimistic`
+    explicitly on both arms and so never exercises the shipped value."""
+    assert FittedQ().pessimistic is True
+
+
+def test_the_double_q_valuer_is_never_the_chooser():
+    """Selecting and valuing a continuation with the same estimator is what
+    turns noise into optimism — the winner's curse this ensemble exists to
+    break. Nothing asserted the two indices differ; the mutation that made them
+    equal was caught only by the magnitude of a threshold nobody derived.
+    """
+    import inspect
+
+    from rebound import fqi
+
+    source = inspect.getsource(fqi.FittedQ.fit)
+    assert "other = (i + 1) % self.ensemble" in source
+    assert "chooser=i, valuer=other" in source
+
+    q = FittedQ(ensemble=3)
+    pairs = [(i, (i + 1) % q.ensemble) for i in range(q.ensemble)]
+    assert all(chooser != valuer for chooser, valuer in pairs)
+    assert len({valuer for _, valuer in pairs}) == q.ensemble
