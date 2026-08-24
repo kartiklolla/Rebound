@@ -23,7 +23,7 @@
 | 08 | Compliance gate (non-bypassable) | ✅ done — 9 rules, reviewed, 434 tests |
 | 09 | Sequencer / agent policy | ✅ done — beats the ladder 4/4 seeds |
 | 09a | Fitted Q-iteration | ✅ built, measured, **not shipped** — diagnosed |
-| 10 | LLM comms layer (Hinglish/multilingual) | ⬜ not started |
+| 10 | LLM comms layer (Hinglish/multilingual) | ✅ done — 13 checks, 22/22 red team, 5 holes documented, 249 tests, live path unrun |
 | 11 | Batch runner + demo dashboard | ⬜ not started |
 | 12 | README, metrics writeup, provenance table | ⬜ not started |
 
@@ -591,6 +591,150 @@ selection decision here is split-protected, and policy selection was not.
 
 So Claim B is re-measured on five seeds that selection never touched
 (`runs/holdout.py`). Whatever they say is the number that gets published.
+
+### D29 - The model writes, it does not decide (2026-08-24)
+
+The comms layer is the one place in this system where a language model is
+clearly the right tool, and the one place where handing it the obvious amount
+of authority would be a mistake.
+
+By the time a drafter is called, everything carrying money or legal exposure is
+already fixed by code that was measured or by a regulation that was cited:
+*whether* to contact by the sequencer's expected value, *when* by the gate's
+deferral arithmetic, the amount and rail by the record, and - the one that
+matters most - *what the customer is told to do*, derived from the failure's
+disposition in `comms.ask_for`. What is left is a language problem: say this,
+to this person, in Hinglish, inside 134 characters.
+
+The instruction is the boundary worth defending. A model that picks its own ask
+will eventually tell a customer whose balance was short to replace a card that
+is fine. They will replace it, the next debit will fail identically, and the
+contact is gone. So `Ask` is a closed set of seven, derived by a function with
+no judgement in it, and `verify.AskIsHonoured` checks that the message carries
+its own instruction and no other.
+
+Three places a model is deliberately **not** used:
+
+- **Classification.** The taxonomy is a lookup on rail return codes. A model
+  would be slower, non-deterministic and worse at it.
+- **Verification.** A model grading a model shares its failure modes and cannot
+  be cross-examined later by anyone deciding whether a message should have gone
+  out. Every check is an exact comparison against the brief.
+- **The fallback.** Templates, proven by test to pass every check for every
+  combination of instruction, channel and language. This is what makes the
+  model safe to use at all: without a fallback the failure mode is either
+  sending something unverified or sending nothing.
+
+**A measured result that fell out of the encoding rules.** One character outside
+GSM-7 re-encodes an entire SMS as UCS-2 and cuts the per-segment budget from 153
+characters to 67. Rendered from the templates, every English and Hinglish
+reminder fits **one** segment; every Hindi one needs **two**. The same message
+costs twice as much to send in Devanagari - a large part of why Indian merchants
+send Hinglish, and why Hinglish is the register that justifies a model rather
+than a translation table.
+
+Three languages ship: English, Hindi, Hinglish. Not eight. A language ships when
+a native speaker has read its fallback templates, because the fallback is what
+goes out on the worst day, and an unreviewed fallback is a guaranteed send of
+text nobody checked. Everything else in the layer is already language-agnostic;
+`REVIEWED_LANGUAGES` is the gate.
+
+### D30 - The verifier's holes are part of the deliverable (2026-08-24)
+
+`scripts/evaluate_comms.py` runs a corpus of bad drafts through the checks. It
+catches 22 of 22 probes with the check written for each.
+
+That number alone would be worthless. The corpus and the checks have the same
+author, so a high catch rate measures that author's imagination. What makes it
+evidence is the other half of the report: five probes marked `MISSED`, each a
+real harm these checks provably do not catch, printed as prominently as the
+wins.
+
+- **A polite threat.** Coercion with no word from the lexicon.
+- **A false causal claim.** "Your bank declined this payment" when the cause may
+  have been our own missing pre-debit notice. The brief withholds the failure
+  code on purpose, so no check here has anything to contradict it with.
+- **A social-engineering setup.** "Our agent will call you shortly." Asks for no
+  credential, so the lexicon has nothing to match.
+- **Fluent but ungrammatical Hinglish.** A marker count cannot measure grammar.
+- **Correct but cruel.** Every fact true; no check reads tone.
+
+Three of the five are tone and intent, exactly where a deterministic check has
+nothing to compare against. That is the honest limit of this layer. The checks
+are labelled by tier in the module docstring - *exact*, *bounded*, *lexical* -
+so nobody reads a clean run on the lexical ones as a guarantee.
+
+### D31 - What the reviewer found in the comms layer (2026-08-24)
+
+Nine findings on the first cut. The first is the one that matters.
+
+**A scheme-less URL passed every check.** `_URL` required `https?://` or `www.`,
+so `evil.example.com/pay` matched nothing - including on voice scripts, where
+links are supposed to be barred outright. Indian transactional SMS routinely
+carries a bare host to save characters, so it is the form a model imitating the
+register actually writes. A verifier that only sees the well-formed half of a
+threat is not a verifier. Now a TLD allow-list rather than `\w+\.\w+`, which
+would have matched "Rs.1,299" and every sentence break.
+
+**The amount check reported a pre-debit notice's own mandate reference as a
+wrong amount.** `_AMOUNT_SUFFIXED` accepted a number followed by "Rs." with no
+left boundary, so `mandate UMRN0012345678 Rs.1,299` parsed `0012345678` as a sum
+of money. It fired on the one message legally required to carry that reference.
+The suffix form now accepts only spelled-out units; nobody writes "1299 Rs" in
+this register anyway.
+
+**The Hinglish check rejected half of natural Hinglish.** The marker list held
+the words a template author reaches for, not the postpositions and verb tails
+that actually make a sentence Hinglish - "Rs.1,299 ka payment fail ho gaya,
+balance daal dijiye" scored zero. Hinglish is the register named as the reason a
+model earns its place, so a false-reject rate there does not merely annoy: it
+inflates the fallback headline in the flattering direction.
+
+Also fixed: two fact tables that had to agree and did not, so quoting the true
+date a debit failed was reported as a fabrication (now one table, derived);
+identifier comparison that tested string formatting rather than truth, so the
+real support number written as `1800-267-0001` was an invention; three of seven
+instructions with no contradiction entry, so "update your card, and keep
+sufficient balance" passed; and an emoji range list standing in for the property
+it actually cared about, which is GSM-7 encodability - it missed `!! (tm) (c)`
+and their neighbours, and a curly apostrophe is not an emoji and costs exactly
+as much.
+
+**Then mutation testing found what the review did not.** Fourteen mutations,
+thirteen caught. The survivor: raising `_IDENTIFIER_DIGITS` from 5 to 50 left all
+202 tests green, because every case exercised only one of the check's two
+branches. They are not redundant - the token branch tests substring containment,
+so it accepts any *fragment* of a true fact, while the digit branch tests exact
+membership and rejects one. `180026` and `2670001` are pieces of the real support
+number, and a number that is nearly right is worse than one invented: it looks
+right enough to dial. Fourteen of fourteen now caught.
+
+**And a bug that hid behind a convenient fixture.** Two checks contradicted each
+other and neither review nor mutation could see it, because every test used the
+mandate reference `UMRN2024HDFC0009911` — invented for readability. The
+simulator issues `MND_0000001`, which matches the SCREAMING_SNAKE shape
+`NoInternalCodes` looks for, while `PreDebitDisclosure` *requires* a notice to
+quote its mandate reference. With the real format, every pre-debit notice was
+blocked outright — fallback included, so `sent is None` and nothing went out at
+all. `NoInternalCodes` now exempts strings that are the brief's own facts, and
+`TestAgainstRealIdentifiers` renders every instruction and language against the
+formats the simulator actually issues. A fixture chosen for legibility is a
+fixture chosen to avoid the collisions real data has.
+
+**And a bug neither found, that only the SDK could tell me.** `AnthropicDrafter`
+sent `temperature=0.4` with a paragraph in its docstring justifying the value.
+`messages.create` on this SDK has no such parameter. The first live call would
+have raised `TypeError`, every message would have fallen back to a template, and
+the report would have shown a model in use. The stub client accepts any keyword,
+which is precisely why a stub cannot catch it; a test now checks the kwargs
+against the real signature without making a network call. The same look turned up
+native structured output, which replaced asking for JSON in the prompt and
+parsing the reply hopefully.
+
+**The live path has not been run.** There is no API key in this environment, so
+everything above is measured against the verifier, the templates and a stub
+client. `--model` is written and unexercised, and stays labelled that way until
+it has been run.
 
 ## Evaluation splits
 

@@ -400,6 +400,92 @@ regime.
 An LLM is used where language is genuinely the problem — customer communication and the
 merchant-facing root-cause narrative.
 
+## The comms layer: the model writes, it does not decide
+
+This is the one place a language model is clearly the right tool, and the one place where
+giving it the obvious amount of authority would be a mistake.
+
+By the time a drafter runs, everything carrying money or legal exposure is already fixed:
+**whether** to contact by the sequencer's expected value, **when** by the gate's deferral
+arithmetic, the amount and rail by the record, and — the one that matters most — **what
+the customer is told to do**, derived from the failure's disposition by `comms.ask_for`.
+What is left is a language problem: say this, to this person, in Hinglish, inside 134
+characters.
+
+The instruction is the boundary worth defending. A model that picks its own ask will
+eventually tell a customer whose balance was short to replace a card that is fine. They
+will replace it, the next debit will fail identically, and the contact is spent. So `Ask`
+is a closed set of seven derived by a function with no judgement in it, and a check
+confirms the message carries its own instruction and no other.
+
+**Generate → verify → repair once → fall back.** Every draft is checked against the brief
+by 13 deterministic checks. Nothing that fails is sent. A failure is fed back for one
+repair attempt; a second failure falls back to a template proven by test to pass every
+check for every combination of instruction, channel and language. That fallback is what
+makes the model safe to use at all — without it the failure mode is either sending
+something unverified or sending nothing.
+
+The verifier calls no model. A model grading a model shares its failure modes and cannot
+be cross-examined later by whoever has to decide whether a message should have gone out.
+
+### Segment arithmetic, which turned out to be a language decision
+
+One character outside GSM-7 re-encodes an entire SMS as UCS-2 and cuts the per-segment
+budget from 153 characters to 67. Rendered from the shipped templates:
+
+| Language | Encoding | SMS segments |
+|---|---|---:|
+| English | GSM-7 | 1 |
+| Hinglish | GSM-7 | 1 |
+| Hindi | UCS-2 | 2 |
+
+The same reminder costs twice as much to send in Devanagari. That is a large part of why
+Indian merchants send Hinglish — and Hinglish, whose spelling is not standardised, is
+exactly what a template library is worst at and a model is good at. It is also why the
+templates write `Rs.` and never `₹`: the rupee sign is not in GSM-7, so one of them
+halves the message.
+
+Three languages ship: English, Hindi, Hinglish. Not eight. A language ships when a native
+speaker has read its fallback templates, because the fallback is what goes out on the
+worst day, and an unreviewed fallback is a guaranteed send of text nobody checked.
+
+### What the verifier catches, and what it does not
+
+`scripts/evaluate_comms.py` runs a corpus of bad drafts through the checks. **22 of 22
+probes are caught by the check written for them** — wrong amounts, invented reference
+numbers, phishing hosts, leaked internal failure codes, credential solicitation, threats,
+unsigned messages, wrong instructions, a pre-debit notice missing its disclosures, an
+undeliverable message.
+
+That number alone would be worthless: the corpus and the checks have the same author, so
+a high catch rate measures that author's imagination. What makes it evidence is the other
+half of the report — **five probes the checks provably do not catch**, printed as
+prominently as the wins:
+
+- **A polite threat.** Coercion with no word from the lexicon.
+- **A false causal claim.** "Your bank declined this payment" when the cause may have been
+  our own missing pre-debit notice. The brief withholds the failure code on purpose, so no
+  check here has anything to contradict it with.
+- **A social-engineering setup.** "Our agent will call you shortly." Asks for no
+  credential, so the lexicon has nothing to match.
+- **Fluent but ungrammatical Hinglish.** A marker count cannot measure grammar.
+- **Correct but cruel.** Every fact true; no check reads tone.
+
+Three of the five are tone and intent, exactly where a deterministic check has nothing to
+compare against. The checks are labelled by tier — *exact*, *bounded*, *lexical* — so a
+clean run on the lexical ones is not read as a guarantee.
+
+### Status of the live path
+
+The verifier, the templates and the desk are exercised by 249 tests, including 14
+mutations of the source that the suite catches. **The live API path has not been run** —
+there is no API key in this environment, so every number above is measured against the
+verifier, the templates and a stub client. To exercise it:
+
+```bash
+ANTHROPIC_API_KEY=... uv run python scripts/evaluate_comms.py --model
+```
+
 ## Adversarial review
 
 The simulator, harness and policy interface were red-teamed black-box before the model
