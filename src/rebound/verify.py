@@ -100,64 +100,130 @@ def _finding(check: Check, detail: str) -> Finding:
 # Exact checks
 # ==========================================================================
 
-#: Top-level domains a link in one of these messages could plausibly use.
-#:
-#: An allow-list rather than ``\w+\.\w+`` because the alternative matches
-#: "Rs.1,299", "e-NACH" and the join between a full stop and the next sentence.
-_TLDS = (
-    "in|com|co|net|org|io|app|me|biz|info|xyz|link|page|site|online|shop|"
-    "store|bank|pay|ind|gov"
+# --------------------------------------------------------------------------
+# Anything that could function as a link
+# --------------------------------------------------------------------------
+#
+# This is written the opposite way round from how it started, and the reversal
+# is the single most important correction in this module.
+#
+# The first version detected URLs against an allow-list of twenty-one
+# top-level domains. Everything off that list was invisible, so
+# ``vahan-secure.ru/pay`` matched nothing, drew no finding, and was returned by
+# the desk as cleared to send — on a voice script too, where links are supposed
+# to be barred absolutely. The red-team corpus reported the link check at 3/3
+# and said nothing about it, because its one scheme-less probe happened to sit
+# comfortably inside the allow-list. An enumeration of the bad shapes cannot
+# work: the attacker picks the shape.
+#
+# So the polarity is inverted. Anything token-shaped that could plausibly
+# resolve, be tapped, or be typed into a browser is *suspect by default*, and
+# only three things clear it: the exact link on the brief, an ordinary number
+# or amount, and a short list of English abbreviations.
+#
+# That deliberately rejects "keep sufficient balance.In case of trouble" — a
+# missing space, not a link. An earlier version of this module treated that
+# false positive as the thing to optimise away, which was the wrong call and
+# was made for the wrong reason: it was reasoning about the reported fallback
+# rate rather than about harm. The two errors are not comparable. A false
+# positive costs one repair round trip, and the repair pass is told exactly
+# which token offended, so the model fixes the typo and the message goes out.
+# A false negative costs a customer their money. Fail closed.
+
+#: Characters that are not U+002E but that resolvers and humans read as a dot.
+_CONFUSABLE_DOTS = str.maketrans(
+    {"․": ".", "．": ".", "。": ".", "۔": ".", "‧": "."}
 )
 
-#: A URL, with or without a scheme.
-#:
-#: The scheme has to be optional, and that is not a nicety. Indian
-#: transactional SMS routinely carries a bare host to save characters, so a
-#: model imitating the register writes one — and against a scheme-only pattern
-#: ``evil.example.com/pay`` matched nothing, passed every check including the
-#: outright bar on voice scripts, and would have been sent. A verifier that
-#: only sees the well-formed half of a threat is not a verifier.
-_URL = re.compile(
-    rf"(?P<scheme>https?://|www\.)[^\s<>\"')\]]+"
-    rf"|(?<![@\w.])(?P<bare>(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:{_TLDS})\b"
-    rf"(?P<path>/[^\s<>\"')\]]*)?)",
-    re.IGNORECASE,
+#: Punctuation that ends a sentence rather than belonging to the token.
+_TRAILING_PUNCTUATION = ".,;:!?)]}\"'»…"
+
+#: A dot immediately followed by a letter. This is what distinguishes a host
+#: from money: ``vahan.in`` has one, ``Rs.1,299`` and ``05.09.2026`` do not.
+_DOT_THEN_LETTER = re.compile(r"\.[^\W\d_]", re.UNICODE)
+
+#: Four numeric labels. A bare address needs no TLD at all.
+_IPV4 = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}(?:[:/].*)?$")
+
+#: A host:port, which carries no dot-then-letter when the host is numeric.
+_HOST_PORT = re.compile(r":\d{2,5}(?:/|$)")
+
+#: A plain quantity — an amount, a decimal, a numbered reference.
+_JUST_A_NUMBER = re.compile(
+    r"^(?:₹|rs\.?|inr|₨)?[\d,]+(?:\.\d+)?(?:/-)?$", re.IGNORECASE
 )
+
+#: English abbreviations that carry an internal dot and are not hosts.
+_ABBREVIATIONS = frozenset(
+    {"a.m.", "p.m.", "e.g.", "i.e.", "no.", "vs.", "etc.", "pvt.", "ltd.", "co."}
+)
+
+
+def _tokens(text: str) -> list[str]:
+    return text.translate(_CONFUSABLE_DOTS).split()
+
+
+def _is_link_shaped(token: str) -> bool:
+    """Whether ``token`` could resolve, be tapped, or be typed into a browser.
+
+    Deliberately broad. ``upi://pay?pa=someone@psp`` is the case that matters
+    most in this domain and has no TLD at all: it is a tappable payment intent
+    that sends money straight to whoever wrote it.
+    """
+    if token.casefold() in _ABBREVIATIONS:
+        return False
+    stripped = token.strip(_TRAILING_PUNCTUATION)
+    if not stripped:
+        return False
+    if "://" in stripped or stripped.startswith("//"):
+        return True
+    if _JUST_A_NUMBER.match(stripped):
+        return False
+    if "@" in stripped:
+        return True
+    if _IPV4.match(stripped) or _HOST_PORT.search(stripped):
+        return True
+    return _DOT_THEN_LETTER.search(stripped) is not None
+
+
+def _permitted_tokens(brief: MessageBrief) -> frozenset[str]:
+    """Bare forms of every whitespace-separated word in the brief's own facts.
+
+    Whole tokens, never substrings. Substring containment would exempt
+    ``vahan.in`` because it sits inside the permitted ``pay.vahan.in``, and a
+    bare parent domain is a different destination from the link we issued.
+    """
+    return frozenset(
+        _bare(word)
+        for fact in brief.quotable_facts
+        for word in fact.split()
+        if _bare(word)
+    )
 
 
 def _find_urls(text: str) -> list[str]:
-    """Every URL in ``text``, with sentence breaks filtered out.
+    """Every token in ``text`` that could function as a link.
 
-    The bare-host branch has to be case-insensitive to catch a shouted
-    ``EVIL.EXAMPLE.COM/pay``, and that makes an English full stop followed by a
-    capitalised word look like a host: "keep sufficient balance.In case of
-    trouble" matched ``balance.In``, and "the account.In future" matched
-    ``account.In``. A missing space after a full stop is a typo a model
-    produces, and rejecting the message for it forces a fallback over nothing.
-
-    So a host with no scheme has to look like a host in one of three ways: it
-    has a path, or it has three or more labels, or it is written in lower case
-    the way a bare host in an SMS actually is. ``balance.In`` is none of those.
-    A real host loses nothing — ``vahan.in`` is lower case, ``pay.vahan.in``
-    has three labels, and anything with a path qualifies outright.
+    Returned without trailing sentence punctuation, so the caller compares a
+    destination rather than a destination plus a full stop.
     """
-    urls: list[str] = []
-    for match in _URL.finditer(text):
-        if match.group("scheme"):
-            urls.append(match.group(0))
-            continue
-        token = match.group("bare")
-        host = token.split("/", 1)[0]
-        if match.group("path") or host.count(".") >= 2 or host.islower():
-            urls.append(token)
-    return urls
+    return [
+        token.strip(_TRAILING_PUNCTUATION)
+        for token in _tokens(text)
+        if _is_link_shaped(token)
+    ]
 
 
 def _strip_urls(text: str) -> str:
-    """``text`` with its URLs blanked out, for checks that must ignore them."""
-    for url in _find_urls(text):
-        text = text.replace(url, " ")
-    return text
+    """``text`` with its link-shaped tokens blanked out.
+
+    Used by the checks that must not read a URL as prose — the script ratio
+    would otherwise call a fully Devanagari message 44% Latin because of the
+    path on a payment link.
+    """
+    return " ".join(
+        "" if _is_link_shaped(token) else token for token in _tokens(text)
+    )
 
 #: Money written with a symbol in front of it.
 #:
@@ -245,17 +311,13 @@ class AmountIsExact:
         return None
 
 
-#: Digit runs at or above this length are treated as identifiers rather than
-#: incidental numbers.
+#: A token long enough to be an identifier rather than a passing number.
 #:
-#: Four would flag years and times. Six would let a five-digit invented
-#: reference through. Five sits above everything a message says in passing —
-#: dates, hours, a day of the month — and below every real identifier on these
-#: rails, where a UMRN and a customer-care number are both far longer.
-_IDENTIFIER_DIGITS = 5
-
-#: A token that mixes letters and digits, which is what a reference number
-#: looks like on every rail here.
+#: Five characters. Four would flag years and clock times; six would let a
+#: five-digit invented reference through. Five sits above everything a message
+#: says in passing — a date, an hour, a day of the month — and below every real
+#: identifier on these rails, where a UMRN and a customer-care number are both
+#: far longer.
 _ALNUM_TOKEN = re.compile(r"\b[A-Za-z0-9][A-Za-z0-9/_-]{4,}\b")
 
 
@@ -275,21 +337,29 @@ class NoFabricatedIdentifiers:
 
     def run(self, draft: Draft, brief: MessageBrief) -> Finding | None:
         text = _strip_urls(draft.rendered())
-        facts = self._facts(brief)
-        permitted = brief.permitted_numerals
+        facts = _permitted_tokens(brief)
 
-        for run in re.findall(r"\d+", text):
-            if len(run) >= _IDENTIFIER_DIGITS and run not in permitted:
-                return _finding(
-                    self,
-                    f"contains the number {run}, which is not the amount, the "
-                    f"mandate reference {brief.mandate_reference} or the "
-                    f"support number — remove it",
-                )
+        # One rule, not two. There used to be a separate pass over bare digit
+        # runs, because the token pass compared by substring containment and so
+        # accepted any *fragment* of a true fact — a run like 180026, a piece
+        # of the real support number, needed exact set membership to be caught.
+        #
+        # Moving the token pass to exact matching subsumed it entirely. Over
+        # 400,000 randomly generated strings there was no input the digit pass
+        # rejected and the token pass accepted, while the token pass rejects
+        # strictly more: HDFC0009911, the tail of the real mandate reference,
+        # is a fabrication that the digit pass waved through because every
+        # digit run inside it is genuinely ours.
         for token in _ALNUM_TOKEN.findall(text):
             if not any(ch.isdigit() for ch in token):
                 continue
-            if not any(_bare(token) in fact for fact in facts):
+            # Whole tokens, not substrings. Substring containment accepted any
+            # *fragment* of a true fact, so ``HDFC0009911`` — the tail of the
+            # real reference UMRN2024HDFC0009911 — passed both branches: the
+            # digit run inside it is genuinely one of ours. A customer quotes
+            # that to support, support cannot find it, and a nearly-right
+            # reference is worse than an obviously invented one.
+            if _bare(token) not in facts:
                 return _finding(
                     self,
                     f"contains the reference {token!r}, which is not one of "
@@ -297,10 +367,6 @@ class NoFabricatedIdentifiers:
                     f"{brief.mandate_reference}",
                 )
         return None
-
-    @staticmethod
-    def _facts(brief: MessageBrief) -> tuple[str, ...]:
-        return tuple(_bare(fact) for fact in brief.quotable_facts)
 
 
 _SCHEME = re.compile(r"^(?:https?://)?(?:www\.)?", re.IGNORECASE)
@@ -324,34 +390,47 @@ class LinksAreOurs:
 
     def run(self, draft: Draft, brief: MessageBrief) -> Finding | None:
         found = _find_urls(draft.rendered())
-        if not found:
-            if brief.ask is Ask.PAY_NOW_VIA_LINK:
+
+        # Our own link, and any dotted token that is a word from the brief's
+        # own facts, are the only things that clear. Compared without the
+        # scheme and without trailing punctuation, because a message that
+        # writes our link as a bare host is writing the same link — while a
+        # *different* host is caught either way.
+        ours = _canonical_url(brief.link) if brief.link else None
+        permitted = _permitted_tokens(brief)
+        stray = [
+            token
+            for token in found
+            if _canonical_url(token) != ours
+            and _bare(token.strip(_TRAILING_PUNCTUATION)) not in permitted
+        ]
+
+        if not stray:
+            if brief.ask is Ask.PAY_NOW_VIA_LINK and not any(
+                _canonical_url(token) == ours for token in found
+            ):
                 return _finding(
                     self, f"must contain the payment link {brief.link}"
                 )
             return None
+
         if not brief.spec.links_allowed:
             return _finding(
-                self, f"{brief.channel} messages carry no links; remove {found[0]}"
+                self,
+                f"{brief.channel} messages carry no links; remove {stray[0]!r}",
             )
         if brief.link is None:
             return _finding(
-                self, f"contains a link ({found[0]}) but this message has none to send"
-            )
-        # Compared without the scheme and without trailing punctuation. A
-        # message that writes our own link as a bare host is writing the same
-        # link, and rejecting it forces a fallback over a formatting choice —
-        # while the case that actually matters, a *different* host, is caught
-        # either way.
-        ours = _canonical_url(brief.link)
-        stray = [url for url in found if _canonical_url(url) != ours]
-        if stray:
-            return _finding(
                 self,
-                f"links to {stray[0]}, which is not ours — the only permitted "
-                f"URL is {brief.link}",
+                f"contains {stray[0]!r}, which could be tapped or typed as a "
+                "link, and this message has no link to send",
             )
-        return None
+        return _finding(
+            self,
+            f"contains {stray[0]!r}, which is not ours — the only permitted "
+            f"URL is {brief.link}. If that was a missing space after a full "
+            "stop, add the space",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -611,9 +690,15 @@ class SenderIsIdentified:
     category: Category = Category.SAFETY
 
     def run(self, draft: Draft, brief: MessageBrief) -> Finding | None:
-        if brief.merchant.name.casefold() not in draft.rendered().casefold():
+        # The signature, not the legal entity. Requiring the full registered
+        # name made a one-segment SMS unwritable — "Vahan Technologies Private
+        # Limited" alone is a fifth of the GSM-7 budget — so the check
+        # rejected every correct draft and no message could clear at all.
+        signature = brief.merchant.signature
+        rendered = draft.rendered().casefold()
+        if signature.casefold() not in rendered:
             return _finding(
-                self, f"does not name the sender; it must say {brief.merchant.name}"
+                self, f"does not name the sender; it must say {signature}"
             )
         return None
 
@@ -719,6 +804,16 @@ _CONTRADICTIONS: dict[Ask, frozenset[str]] = {
 _COMPATIBLE: dict[Ask, frozenset[Ask]] = {
     Ask.AMEND_MANDATE: frozenset({Ask.REAUTHORISE_MANDATE}),
     Ask.REAUTHORISE_MANDATE: frozenset({Ask.AMEND_MANDATE}),
+    # "Please approve the new mandate request in your UPI app" is the natural
+    # English for this instruction, and it was unwritable: the phrase "new
+    # mandate" belongs to REAUTHORISE_MANDATE, so the check rejected the
+    # sentence the check exists to permit.
+    Ask.APPROVE_IN_APP: frozenset({Ask.REAUTHORISE_MANDATE}),
+    # A pre-debit notice legitimately reminds the customer to have funds
+    # ready — that is the standard wording, and it is not an instruction to do
+    # anything the notice was not for. It must still not tell them to touch a
+    # card or a mandate, so only this one is compatible.
+    Ask.NOTHING: frozenset({Ask.KEEP_BALANCE}),
 }
 
 
@@ -784,30 +879,73 @@ class PreDebitDisclosure:
         if brief.action is not Action.SEND_PRE_DEBIT_NOTIFICATION:
             return None
         text = draft.rendered()
-        folded = text.casefold()
         missing = []
-        if brief.mandate_reference.casefold() not in folded:
+
+        # Compared through _bare, as everywhere else in this module, so a
+        # reference written ICIC 8842 0091 satisfies a brief holding
+        # ICIC-8842-0091. Matching raw made this a test of punctuation.
+        if _bare(brief.mandate_reference) not in _bare(text):
             missing.append(f"the mandate reference {brief.mandate_reference}")
+
         if brief.retry_on is None:
             missing.append("a debit date (none was supplied to the brief)")
-        elif not any(
-            form in text
-            for form in (
-                brief.retry_on.strftime("%d/%m/%Y"),
-                brief.retry_on.strftime("%d-%m-%Y"),
-                brief.retry_on.isoformat(),
-                brief.retry_on.strftime("%d %b"),
-                brief.retry_on.strftime("%d %B"),
-                str(brief.retry_on.day),
-            )
-        ):
+        elif not self._states_the_date(text, brief):
             missing.append(f"the debit date {brief.retry_on:%d/%m/%Y}")
+
+        # The amount, which this check's own docstring claimed to require and
+        # did not. AmountIsExact confirms any figure present is the right one;
+        # it does not make a notice state one, and a notice without an amount
+        # discloses nothing.
+        if not _AMOUNT_PREFIXED.search(text) and not _AMOUNT_SUFFIXED.search(text):
+            missing.append(f"the amount {brief.amount_text}")
+
         if missing:
             return _finding(
                 self,
                 "is a pre-debit notice and omits " + " and ".join(missing),
             )
         return None
+
+    @staticmethod
+    def _states_the_date(text: str, brief: MessageBrief) -> bool:
+        """Whether a real date appears, rather than a digit that happens to match.
+
+        The accepted forms used to include the bare day-of-month, a one- or
+        two-character substring tested against the whole message. Any stray
+        ``5`` — in ``Rs.1,599``, in the reference, in a phone number —
+        satisfied the disclosure, so a notice reading "Rs.1,599 will be debited
+        soon" passed with no date in it at all and the debit behind it went out
+        unnotified.
+
+        A day number now only counts when a month name sits beside it, which is
+        what makes "debited on 5 September" a date and "Rs.1,599" not one.
+        """
+        day = brief.retry_on
+        assert day is not None
+        for form in (
+            day.strftime("%d/%m/%Y"),
+            day.strftime("%d-%m-%Y"),
+            day.strftime("%d.%m.%Y"),
+            day.isoformat(),
+            day.strftime("%d/%m/%y"),
+        ):
+            if form in text:
+                return True
+        # Day beside a month name, in either order, with the day written with
+        # or without its leading zero.
+        months = (day.strftime("%b"), day.strftime("%B"))
+        days = (str(day.day), f"{day.day:02d}")
+        folded = text.casefold()
+        return any(
+            re.search(
+                rf"(?<!\d){re.escape(d)}(?!\d)\s*(?:of\s+)?{re.escape(m.casefold())}"
+                rf"|{re.escape(m.casefold())}\s+(?<!\d){re.escape(d)}(?!\d)",
+                folded,
+            )
+            is not None
+            for d in days
+            for m in months
+        )
 
 
 # ==========================================================================
@@ -822,7 +960,7 @@ class PreDebitDisclosure:
 #: direction is a customer handing an OTP to whoever asks next.
 _CREDENTIAL_MARKERS: tuple[str, ...] = (
     "otp", "o.t.p", "one time password", "one-time password", "upi pin",
-    "atm pin", "mpin", "cvv", "card number", "full card number", "password",
+    "atm pin", "mpin", "cvv", "card number", "full card number",
     "aadhaar", "aadhar", "net banking password", "security code",
     # The paraphrases. A solicitation does not have to name the thing it
     # wants: "reply with the 6-digit code we just sent" carries none of the
@@ -835,19 +973,54 @@ _CREDENTIAL_MARKERS: tuple[str, ...] = (
 #: Debt-collection language. RBI's fair-practices expectations bar coercion,
 #: and a recurring-payments failure is not a default in any case: the customer
 #: agreed to pay and a rail said no.
+#:
+#: Whole words only; the stems below carry everything that inflects.
 _COERCION_MARKERS: tuple[str, ...] = (
-    "legal action", "legal notice", "court", "police", "recovery agent",
-    "blacklist", "black list", "defaulter", "seize", "prosecut", "criminal",
-    "consequences will", "final warning", "immediately or",
-    "kanooni", "kanuni", "vasooli",
+    "legal action", "legal notice", "court", "courts", "police",
+    "recovery agent", "black list", "consequences will", "final warning",
+    "immediately or", "kanooni", "kanuni", "vasooli",
     "क़ानूनी", "कानूनी", "अदालत", "पुलिस", "वसूली",
 )
+
+#: Markers matched as prefixes, because English inflects and a word list that
+#: does not was a check that could not fire.
+#:
+#: ``"prosecut"`` sat in the whole-word list, where ``_word_present``'s
+#: trailing ``(?![a-z])`` made it matchable only by the string "prosecut",
+#: which is not a word. "We will prosecute you for this outstanding amount"
+#: passed the entire verifier. The same held for ``blacklisted``,
+#: ``defaulters``, ``seized``, ``seizure`` and ``passwords`` — every marker
+#: whose plural or past tense is the form anyone would actually write.
+#:
+#: Kept separate from the whole-word list rather than making everything a
+#: prefix, because "court" as a prefix matches "courtesy" and a polite message
+#: would be rejected for good manners.
+_COERCION_STEMS: tuple[str, ...] = (
+    "prosecut", "blacklist", "defaulter", "seiz", "criminal", "penalis",
+    "penaliz", "threaten", "litigat",
+)
+
+#: Credential markers matched as prefixes. ``password`` covers ``passwords``;
+#: ``pin`` deliberately stays a whole word, or it would fire on "pink".
+_CREDENTIAL_STEMS: tuple[str, ...] = ("password",)
+
+#: Whole-word credential markers short enough to collide if used as prefixes.
+_CREDENTIAL_WORDS: tuple[str, ...] = ("pin",)
 
 
 def _word_present(marker: str, text: str) -> bool:
     if " " in marker or not marker.isascii():
         return marker in text
     return re.search(rf"(?<![a-z]){re.escape(marker)}(?![a-z])", text) is not None
+
+
+def _stem_present(stem: str, text: str) -> bool:
+    """Whether ``text`` contains a word beginning with ``stem``.
+
+    Left boundary only, so ``seiz`` matches ``seized`` and ``seizure`` but not
+    the tail of some longer unrelated word.
+    """
+    return re.search(rf"(?<![a-z]){re.escape(stem)}", text) is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -866,11 +1039,18 @@ class NoCredentialSolicitation:
 
     def run(self, draft: Draft, brief: MessageBrief) -> Finding | None:
         text = draft.rendered().casefold()
-        for marker in _CREDENTIAL_MARKERS:
+        for marker in (*_CREDENTIAL_MARKERS, *_CREDENTIAL_WORDS):
             if _word_present(marker, text):
                 return _finding(
                     self,
                     f"mentions {marker!r}; a payment message never refers to a "
+                    "PIN, OTP, CVV or password, not even to warn about one",
+                )
+        for stem in _CREDENTIAL_STEMS:
+            if _stem_present(stem, text):
+                return _finding(
+                    self,
+                    f"mentions {stem!r}; a payment message never refers to a "
                     "PIN, OTP, CVV or password, not even to warn about one",
                 )
         return None
@@ -896,6 +1076,13 @@ class NoCoercion:
                 return _finding(
                     self,
                     f"uses collections language ({marker!r}); a failed autopay "
+                    "is not a default and the message must not threaten",
+                )
+        for stem in _COERCION_STEMS:
+            if _stem_present(stem, text):
+                return _finding(
+                    self,
+                    f"uses collections language ({stem!r}); a failed autopay "
                     "is not a default and the message must not threaten",
                 )
         return None
