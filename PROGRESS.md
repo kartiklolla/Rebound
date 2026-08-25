@@ -23,7 +23,7 @@
 | 08 | Compliance gate (non-bypassable) | ✅ done — 9 rules, reviewed, 434 tests |
 | 09 | Sequencer / agent policy | ✅ done — beats the ladder 4/4 seeds |
 | 09a | Fitted Q-iteration | ✅ built, measured, **not shipped** — diagnosed |
-| 10 | LLM comms layer (Hinglish/multilingual) | ✅ done — 13 checks, 22/22 red team, 5 holes documented, 249 tests, live path unrun |
+| 10 | LLM comms layer (Hinglish/multilingual) | ✅ done — 13 checks, 28/28 red team, 5 holes documented, 333 tests, 27/27 mutations, live path unrun |
 | 11 | Batch runner + demo dashboard | ⬜ not started |
 | 12 | README, metrics writeup, provenance table | ⬜ not started |
 
@@ -700,14 +700,43 @@ it actually cared about, which is GSM-7 encodability - it missed `!! (tm) (c)`
 and their neighbours, and a curly apostrophe is not an emoji and costs exactly
 as much.
 
-**Then mutation testing found what the review did not.** Fourteen mutations,
-thirteen caught. The survivor: raising `_IDENTIFIER_DIGITS` from 5 to 50 left all
-202 tests green, because every case exercised only one of the check's two
-branches. They are not redundant - the token branch tests substring containment,
+**Then mutation testing found what the review did not.** Eighteen mutations, seventeen
+caught on the first pass. The survivor: raising `_IDENTIFIER_DIGITS` from 5 to
+50 left all 202 tests green, because every case exercised only one of the
+check's two branches. They are not redundant - the token branch tests substring containment,
 so it accepts any *fragment* of a true fact, while the digit branch tests exact
 membership and rejects one. `180026` and `2670001` are pieces of the real support
 number, and a number that is nearly right is worse than one invented: it looks
-right enough to dial. Fourteen of fourteen now caught.
+right enough to dial. (That reasoning was correct at the time and has since
+been overtaken — see D32, where making the token branch exact subsumed the
+digit branch entirely and it was deleted.)
+
+**Then two more, found by refusing to build any fixture by hand.**
+`tests/test_comms_integration.py` samples a population, takes the debits that
+actually failed, adjudicates through a real gate, and composes from the
+resulting approval and the episode's own view. Both defects it found were
+invisible to every hand-built test.
+
+*The approval was forgeable.* `MessageBrief.build` structurally typed both its
+arguments. That is right for the episode record — it comes from whatever system
+holds it — and wrong for the approval, whose entire purpose is to be evidence
+the gate was consulted. Any object with three attributes produced a brief, so
+"there is no path to a message the gate did not permit" rested on callers
+choosing not to. `build` now requires a real `ApprovedAction`. Notably my own
+test asserted the wrong exception type, which is how the hole stayed hidden
+inside a test written to find exactly this.
+
+*Compliance and structural legality are different questions, and only one was
+asked.* The gate has no rule about dispositions, so it approves
+`REQUEST_REMANDATE` on a `RETRY_TIMING` episode — an action the taxonomy calls
+meaningless there. Composed, that becomes "set up your autopay mandate again"
+sent to a customer whose balance was briefly short. Nothing downstream can
+fault it: the message is internally consistent, quotes the right amount and
+honours the instruction it was given. The instruction was wrong, and the
+instruction is the one thing this layer exists to get right. The sequencer does
+restrict candidates by disposition, so the shipped path never hit it — which is
+the argument for checking in the brief rather than against it, since a
+guarantee that rests on one caller remembering is not a guarantee.
 
 **And a bug that hid behind a convenient fixture.** Two checks contradicted each
 other and neither review nor mutation could see it, because every test used the
@@ -735,6 +764,86 @@ parsing the reply hopefully.
 everything above is measured against the verifier, the templates and a stub
 client. `--model` is written and unexercised, and stays labelled that way until
 it has been run.
+
+### D32 - The link check had the wrong polarity (2026-08-25)
+
+A second independent review found fifteen defects. One of them is the worst
+thing found anywhere in this project.
+
+**`vahan-secure.ru/pay` was cleared to send.** The link check detected URLs
+against an allow-list of twenty-one top-level domains, so anything off the list
+matched nothing, drew no finding, and came back from the desk as a message to
+deliver. It reproduced on voice scripts too, where links are supposed to be
+barred absolutely. Also invisible: bare IPv4, any two-label host that was not
+lowercase, a host with a port, U+2024 in place of the dot, and
+`upi://pay?pa=someone@psp` — a tappable payment intent, prefilled with the
+right amount, straight to whoever wrote it, needing no domain name at all.
+
+The red-team corpus reported that check at 3/3 the whole time. Its one
+scheme-less probe sat comfortably inside the allow-list, so the number measured
+nothing. **A probe that does not press on a boundary is a probe that measures
+nothing**, and "22 of 22 caught" was worth exactly as much as its weakest
+probe.
+
+The polarity was wrong. An enumeration of bad shapes cannot work, because the
+attacker picks the shape. Anything token-shaped that could resolve, be tapped
+or be typed is now suspect by default, and three things clear it: the exact
+link on the brief, an ordinary number, and a short list of abbreviations.
+
+**That reverses a decision made one day earlier, for a reason worth recording.**
+D31 describes "fixing" a false positive where `balance.In case of trouble`
+matched as a host. Under the new rule it matches again, deliberately. The
+original fix was optimising the reported fallback rate rather than the harm,
+and the two are not comparable: a false positive costs one repair round trip,
+with the offending token named in the feedback so the model fixes the space; a
+false negative costs a customer their money. Fail closed. The filter was also
+load-bearing in the wrong direction — it accepted any host that was not
+lowercase and had fewer than three labels, which is most of the phishing
+surface.
+
+**Three more checks could not fire.** `"prosecut"` sat in a lexicon matched with
+a trailing word boundary, so it could only match the string "prosecut", which
+is not a word: "we will prosecute you for this outstanding amount" passed the
+entire verifier. So did `blacklisted`, `defaulters` and `seized`. Stems are now
+a separate table from whole words, because "court" as a prefix matches
+"courtesy" and a polite message would be rejected for good manners.
+
+The pre-debit disclosure accepted the bare day-of-month as a date — a one or
+two character substring tested against the whole message — so the `5` in
+`Rs.1,599` discharged a disclosure about 5 September and the debit behind that
+notice went out unnotified. A day now counts only with a month beside it. The
+check also claimed in its own docstring to require the amount and did not.
+
+**`compose` was not total, and `fell_back` was drafter-controlled.** A raising
+fallback propagated, which is exactly the condition the guarantee exists for —
+`render_template` raises `KeyError` the moment a rail or language is added
+without a table entry. And `fell_back` was `sent.produced_by == "template"`, a
+string the drafter writes: running the desk with `TemplateDrafter` as the
+*primary* drafter, which is the no-model baseline, reported 100% fallback, and
+any drafter could launder its own output as the safe path by claiming the name.
+Whether the fallback ran is a fact about control flow and is now the loop's to
+state. Nothing type-checked the returned draft either, so a duck-typed object
+whose `rendered()` returned different text on the second call was verified as
+one message and handed back as another.
+
+**Nine of thirty evaluation briefs were shapes the sequencer cannot emit** —
+channel set independently of the action it arrives on — so part of the measured
+fallback rate was measured on messages that do not exist.
+
+**Then the mutation suite lied to me.** Four mutations reported as survivors
+were patterns that no longer matched the rewritten source: `perl` changes
+nothing and exits 0, so a stale mutation looks like a hole in the tests rather
+than a hole in the runner. It now refuses to score a mutation that did not
+change the file. A fifth was worse — `_COERCION_STEMS = () or (...)` evaluates
+to the right operand, a semantic no-op that *did* change the file, so the diff
+guard could not see it. And one genuine survivor was a test of mine that set
+`body="x"` on the object it was probing with, which fails the length check on
+its own, so the guard under test was never reached.
+
+Twenty-seven mutations, twenty-seven caught. 818 tests, 333 in this layer. The
+red team is 28 of 28 with five documented holes — and the link check now has
+seven probes rather than three, sitting on the boundary rather than well inside
+it.
 
 ## Evaluation splits
 

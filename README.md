@@ -184,9 +184,10 @@ magnitudes.
 ### Why these seeds and not the earlier ones
 
 Roughly ten policy variants were compared during development on a fixed set of
-five seeds. Ten looks at a metric whose seed standard deviation is ~34,000 is ten
-chances to get lucky, and nothing in the project protected against that — every
-other selection decision here is split-protected, and policy selection was not.
+four seeds. Ten looks at a metric whose seed standard deviation is ~96,000 on
+that set is ten chances to get lucky, and nothing in the project protected
+against that — every other selection decision here is split-protected, and
+policy selection was not.
 
 So Claim B was re-measured on five seeds selection had never seen. It cost the
 headline most of its size:
@@ -201,6 +202,9 @@ the magnitude did not, which is the outcome this protocol exists to detect. The
 held-out number is the one reported.
 
 ### What Claim B is not
+
+Four things the number above does not support, stated because each was
+initially believed here and had to be withdrawn.
 
 **Not a claim that fitted Q-iteration works here.** It was built properly —
 ledger-derived rewards reconciling exactly with `episode_net_paise`, backward
@@ -216,130 +220,41 @@ Fitted-Q is the correct method applied to a log built to answer a different
 question, and the fix is a generator that randomises timing, not a better
 regressor. See `rebound.fqi`.
 
-**Not converged in training scale.** Holding the world seed fixed and varying
-only the training log, the gap moves non-monotonically and was still moving at
-6,000 customers.
+**Not a claim that contact is profitable.** Two configurations of the same
+sequencer are shipped and both are reported: `rebound_sequencer`, and
+`rebound_sequencer_no_contact` with the contact cap set to zero. On the one
+configuration a committed script reproduces — `scripts/evaluate_sequencer.py`
+at its default world seed — enabling contact is worth **+6,757**, a gap over the
+ladder of +29,680 with contact against +22,923 without. That is a fifth of one
+seed standard deviation and settles nothing. The distance between the two is the
+price of trusting a revocation estimate that observational logs cannot identify,
+and reporting only the winner would be fitting the policy to the scoreboard.
+
+An earlier version of this section put that difference at +51,550 across five
+seeds, winning 4 of 5, p≈0.056. Those figures came from a multi-seed run with no
+committed script and cannot be reproduced, so they are withdrawn rather than
+carried forward.
+
+**Not converged in training scale.** How much training log the policy's models
+are fitted on moves the headline further than the headline itself. At a tenth
+scale, `scripts/evaluate_sequencer.py --quick` puts the sequencer **158,186 behind** the
+ladder where the full run puts it 29,680 ahead, inverts the ordering of the
+contact-enabled and no-contact configurations, and lifts `disposition_rules`
+above `fixed_ladder` where at full scale it is well below. A reduced-scale run is
+not a small version of this experiment — it is a different, weaker model.
+
+An earlier version of this section reported a 1,200 / 3,000 / 6,000 training-log
+sweep. Its contact-enabled row no longer reproduces — the 6,000-customer cell
+read +99,516 where that configuration now measures +29,680 — and the sweep has
+no committed script, so it is withdrawn too.
 
 **Not free of pricing error.** The policy under-prices a voice call by about 3×
-relative to the world's compounding contact fatigue, and the expected value
-credits every decision in an episode with the whole episode's recovery — the
-defect fitted-Q was built to remove. Both are open and quantified.
-
-### What review found in the evaluation itself
-
-The sequencer's first reported result was **+100.0% over the fixed ladder**, for
-a policy that had crashed. It exceeded the harness's 120-second budget after
-2,001 of 6,898 episodes; `evaluate_all` isolates a failed policy and substitutes
-an all-zero report; zero revocation and zero contacts then sorted that row to the
-top of a table ordered by net value; and a lift computed against a negative
-baseline turned "did nothing at all" into a gain. The failure notice printed one
-line above the table that contradicted it.
-
-No single piece of that was a bug. Sorting by net value, isolating crashes so one
-bad policy does not destroy a half-hour run, and expressing lift as a ratio are
-all reasonable. They composed into a fabricated headline. The script now refuses
-to tabulate an incomplete run at all, and reports a difference rather than a
-ratio.
-
-### What a second audit found
-
-The model layer was audited independently after it was built, by an agent with no access
-to the reasoning that produced it. Six defects, four in code rather than prose, all fixed
-and all with regression tests:
-
-- **The calibrator was selected under the wrong generalisation regime.** The inner
-  calibration split was always temporal, even when the outer split held out whole
-  customers — so on the customer split the calibrator was chosen on people the booster had
-  already memorised, then applied to strangers. It confidently picked isotonic, which was
-  worse on *every* held-out metric and cost 0.013 PR-AUC. The inner split now mirrors the
-  outer one. Customer-split ECE went 0.0079 → 0.0035 and calibration stopped costing any
-  discrimination.
-- **Two features were byte-identical.** `decision_index` was documented as an identifier
-  but never added to the identifier set, so it reached the model as a twin of
-  `prior_attempts`. Permutation importance shuffles one column at a time, so each twin
-  masked the other and the published ranking was measured wrong.
-- **Two tests asserted things that could not fail.** One checked that a sorted column was
-  sorted; another re-derived a slice using the same arithmetic it was meant to be
-  checking. Both passed while the defect they were named for was present in the data.
-- **The two-head comparison was not like-for-like** — corrected above.
-- **Excluding `customer_id` does not prevent customer memorisation.** The tuple
-  `(bank, billing_day, amount, ceiling, rail)` is unique across all 5,974 customers, and
-  no allowlist can drop it without dropping five legitimate features. Quantified in
-  `eval/splits.py`, and it is the reason the customer split is reported at all.
-
-The four code defects moved the headline numbers *up*, which is the part worth noticing:
-every one of them had been making the model quietly worse while the tests reported green.
-
-### Claim B — policy vs baselines
-
-**Measured on five world seeds that policy selection never touched.** Full
-scale, ~6,900 failed debits per seed, paired random draws.
-
-| Policy | Recovery | Revocation | Contacts/ep | Net ₹/1000 | Gap vs ladder |
-|---|---:|---:|---:|---:|---:|
-| **`rebound_sequencer`** | **0.540** | 0.052 | 0.95 | −97,278 | **+56,787** |
-| `fixed_ladder` | 0.458 | 0.048 | 0.00 | −154,065 | — |
-| `immediate_retry` | 0.407 | 0.052 | 0.00 | −271,976 | −117,911 |
-| `disposition_rules` | 0.428 | 0.061 | 0.90 | −369,653 | −215,588 |
-| `no_recovery` | 0.000 | 0.088 | 0.00 | −1,274,866 | −1,120,801 |
-| `aggressive_contact` | 0.306 | 0.133 | 3.62 | −1,516,667 | −1,362,603 |
-
-Gap over the ladder, per seed: **+11,992 / +38,466 / +59,435 / +73,236 /
-+100,804**. Mean **+56,787**, sd 33,754, **positive on 5 of 5**.
-
-**Every net figure is negative, the ladder's included.** "Ahead" means less bad,
-not profitable. These are simulator rupees — read the ordering, not the
-magnitudes.
-
-### Why these seeds and not the earlier ones
-
-Roughly ten policy variants were compared during development on a fixed set of
-five seeds. Ten looks at a metric whose seed standard deviation is ~34,000 is ten
-chances to get lucky, and nothing in the project protected against that — every
-other selection decision here is split-protected, and policy selection was not.
-
-So Claim B was re-measured on five seeds selection had never seen. It cost the
-headline most of its size:
-
-| | mean gap | min | seeds won |
-|---|---:|---:|---:|
-| Selection seeds | +164,807 | +76,248 | 4/4 |
-| **Held-out seeds** | **+56,787** | **+11,992** | **5/5** |
-
-**The selection-set figure was inflated about 2.9×.** The direction survived and
-the magnitude did not, which is the outcome this protocol exists to detect. The
-held-out number is the one reported.
-
-### What Claim B is not
-
-Three things the number above does not support, stated because each was
-initially believed here and had to be withdrawn.
-
-**"Contact is profitable" is not established.** Paired per seed, enabling contact
-is worth +51,550 on average (sd 43,250) but **wins only 4 of 5 seeds**, t=2.67 on
-4 df, p≈0.056. On one seed the no-contact configuration wins. Both
-configurations are shipped and both are reported; the gap between them is the
-price of trusting a revocation estimate this data cannot identify.
-
-**The result has not converged in training scale.** Holding the world seed
-fixed and varying only the training log:
-
-| Gap over ladder | 1,200 | 3,000 | 6,000 |
-|---|---:|---:|---:|
-| `rebound_sequencer` | +66,442 | +57,845 | +99,516 |
-| `rebound_sequencer_no_contact` | +69,119 | +21,223 | +22,922 |
-
-Non-monotonic, still moving ~+42k between 3,000 and 6,000, and **at 1,200 the
-ordering of the two configurations inverts.** A reduced-scale run is not a small
-version of this experiment — it is a different, weaker model.
-
-**Two pricing errors partially cancel.** The policy under-prices a voice call by
-about 3× (contact fatigue compounds at 1.45^contacts in the world, and the
-per-action label is flat in `prior_contacts`), and under-values a recovery by
-about 2× (a recovered episode is immune to passive churn, worth ~2.01× the
-amount rather than 1×). They point in opposite directions. The policy is
-therefore partly right for the wrong reasons, and both errors are open work
-rather than resolved.
+relative to the world's compounding contact fatigue: the world's revocation
+hazard compounds at `1.45 ** contacts` while the per-action label is flat in
+`prior_contacts`, so three voice calls are priced at 0.0225 where the world
+charges 0.0710. And the expected value credits every decision in an episode with
+the whole episode's recovery — the defect fitted-Q was built to remove. Both are
+open and quantified.
 
 ## The compliance gate
 
@@ -451,11 +366,17 @@ worst day, and an unreviewed fallback is a guaranteed send of text nobody checke
 
 ### What the verifier catches, and what it does not
 
-`scripts/evaluate_comms.py` runs a corpus of bad drafts through the checks. **22 of 22
+`scripts/evaluate_comms.py` runs a corpus of bad drafts through the checks. **28 of 28
 probes are caught by the check written for them** — wrong amounts, invented reference
 numbers, phishing hosts, leaked internal failure codes, credential solicitation, threats,
 unsigned messages, wrong instructions, a pre-debit notice missing its disclosures, an
 undeliverable message.
+
+A count like that is only worth its weakest probe. An earlier version reported the link
+check at 3/3 while `vahan-secure.ru/pay` was being cleared to send, because the one
+scheme-less probe happened to sit inside the detector's blind spot. The link probes now
+sit on the boundary: an unlisted top-level domain, a bare IP address, a lookalike dot, and
+a `upi://` deep link to an attacker's VPA.
 
 That number alone would be worthless: the corpus and the checks have the same author, so
 a high catch rate measures that author's imagination. What makes it evidence is the other
@@ -477,8 +398,11 @@ clean run on the lexical ones is not read as a guarantee.
 
 ### Status of the live path
 
-The verifier, the templates and the desk are exercised by 249 tests, including 14
-mutations of the source that the suite catches. **The live API path has not been run** —
+The verifier, the templates and the desk are exercised by 333 tests, including 27
+mutations of the source that the suite catches. Ten of those tests build nothing by hand:
+they sample a population, take the debits that actually failed, adjudicate through a real
+compliance gate, and compose from the resulting approval. That is how the two worst
+defects in this layer were found. **The live API path has not been run** —
 there is no API key in this environment, so every number above is measured against the
 verifier, the templates and a stub client. To exercise it:
 
