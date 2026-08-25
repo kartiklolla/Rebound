@@ -501,31 +501,85 @@ class TestTheReviewFindings:
     @pytest.mark.parametrize(
         "text, expected",
         [
-            # Real hosts, in the shapes a model actually writes them.
+            # Hosts, in the shapes a model actually writes them.
             ("settle at evil.example.com/pay", ["evil.example.com/pay"]),
             ("settle at EVIL.EXAMPLE.COM/pay", ["EVIL.EXAMPLE.COM/pay"]),
             ("visit vahan.in now", ["vahan.in"]),
             ("visit pay.vahan.in/r/7Kd2Qm", ["pay.vahan.in/r/7Kd2Qm"]),
             ("visit evil.example.com.", ["evil.example.com"]),
             ("Pay.Vahan.In is ours", ["Pay.Vahan.In"]),
-            # Prose. Making the bare-host branch case-insensitive — needed to
-            # catch the shouted form above — turned an English full stop
-            # before a capitalised word into a host. A missing space is a typo
-            # a model produces, and rejecting the message for it forces a
-            # fallback over nothing.
-            ("keep sufficient balance.In case of trouble", []),
-            ("the account.In future we will retry", []),
-            ("contact support.Online help is available", []),
-            ("Rs.1,299.Please keep balance", []),
-            ("e-NACH.Please retry.", []),
-            # An email address is not a link to follow.
-            ("mail help@vahan.in", []),
+            # The shapes an allow-list of top-level domains could never see.
+            # Every one of these was returned as cleared to send.
+            ("pay at vahan-secure.ru/pay", ["vahan-secure.ru/pay"]),
+            ("pay at vahan-secure.top", ["vahan-secure.top"]),
+            ("pay at 203.0.113.9", ["203.0.113.9"]),
+            ("pay at EVIL.CO:8080/pay", ["EVIL.CO:8080/pay"]),
+            # No top-level domain at all, and the worst of them in this
+            # domain: a tappable payment intent straight to an attacker's VPA.
+            ("tap upi://pay?pa=vahan@fraudpsp&am=1299", ["upi://pay?pa=vahan@fraudpsp&am=1299"]),
+            # U+2024 ONE DOT LEADER, which resolvers and eyes read as a dot.
+            ("pay at vahan-secure․com/pay", ["vahan-secure.com/pay"]),
+            # An email or a VPA is a destination too.
+            ("mail help@vahan.in", ["help@vahan.in"]),
         ],
     )
-    def test_a_host_is_told_apart_from_a_sentence_break(self, text, expected):
+    def test_anything_that_could_be_tapped_is_found(self, text, expected):
         from rebound.verify import _find_urls
 
         assert _find_urls(text) == expected
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "keep sufficient balance.In case of trouble",
+            "the account.In future we will retry",
+            "call us.in case of trouble",
+            "settle the dues.pay by Friday",
+            "we could not collect the payment.online banking is unaffected",
+            "aapka payment nahi hua.info ke liye call karein",
+            "Rs.1,299.Please keep balance",
+            "e-NACH.Please retry.",
+        ],
+    )
+    def test_a_missing_space_is_flagged_rather_than_waved_through(self, text):
+        """Fail closed. This reverses an earlier decision in this module.
+
+        A previous version filtered these out, on the reasoning that a missing
+        space is a typo rather than a link and that rejecting it forces a
+        fallback over nothing. That reasoning optimised the reported fallback
+        rate instead of the harm, and the two are not comparable: a false
+        positive costs one repair round trip, with the offending token named in
+        the feedback so the model fixes the space; a false negative costs a
+        customer their money.
+
+        It was also load-bearing in the wrong direction. The filter accepted
+        any host that was not lowercase and had fewer than three labels, which
+        is most of the phishing surface.
+        """
+        from rebound.verify import _find_urls
+
+        assert _find_urls(text), text
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "your payment of Rs.1,299 did not go through",
+            "the amount is 1,299.50 including tax",
+            "we will retry on 05.09.2026",
+            "we will retry on 05/09/2026",
+            "we will retry at 10 a.m. tomorrow",
+            "reference No.5 in your statement",
+            "your e-NACH mandate. Please keep balance.",
+            "Vahan Technologies Pvt. Ltd.",
+        ],
+    )
+    def test_ordinary_prose_and_money_are_not_links(self, text):
+        # Fail-closed must not mean fail-always. An amount, a decimal, a
+        # dotted date, a clock time and a company suffix all carry an internal
+        # dot and none of them resolves.
+        from rebound.verify import _find_urls
+
+        assert _find_urls(text) == [], text
 
     def test_a_mandate_reference_beside_the_amount_is_not_a_second_amount(self):
         # A pre-debit notice is legally required to carry the reference, so
@@ -568,13 +622,34 @@ class TestTheReviewFindings:
         )
         assert findings == (), [f.detail for f in findings]
 
-    def test_the_two_fact_tables_cannot_disagree(self):
-        # They used to be maintained separately and did disagree. Deriving one
-        # from the other is what makes this test hold by construction.
-        brief = make_brief()
-        for fact in brief.quotable_facts:
-            for run in __import__("re").findall(r"\d+", fact):
-                assert run in brief.permitted_numerals
+    def test_every_field_a_message_may_quote_is_permitted(self):
+        """The two fact tables used to disagree, and one was silently thinner.
+
+        An earlier version of this test asserted that every digit run in
+        ``quotable_facts`` appears in ``permitted_numerals`` — which is how
+        ``permitted_numerals`` is *defined*, so it was true for every possible
+        implementation and could not fail. It is replaced by naming the fields
+        outright: a field added to the brief and not to the table is a true
+        fact a drafter is punished for stating.
+        """
+        brief = make_brief(link=LINK)
+        facts = set(brief.quotable_facts)
+        for field in (
+            brief.mandate_reference,
+            brief.merchant.support_number,
+            brief.merchant.name,
+            brief.bank,
+            brief.episode_id,
+            brief.amount_rupees,
+            brief.link,
+        ):
+            assert field in facts, field
+        for day in (brief.retry_on, brief.reference_date):
+            assert day.isoformat() in facts
+            assert day.strftime("%d/%m/%Y") in facts
+        # And the customer id is deliberately absent: it is ours, not theirs,
+        # and no message could legitimately carry it.
+        assert brief.customer_id not in facts
 
     @pytest.mark.parametrize("mangled", ["180026", "2670001", "80026700"])
     def test_a_fragment_of_a_real_identifier_is_a_fabrication(self, mangled):
@@ -811,12 +886,220 @@ class TestScriptRatio:
 
 
 class TestChannelSpecs:
+    """Behaviour, not constants.
+
+    These used to read the value out of ``CHANNEL_SPECS`` and assert it equals
+    itself, which cannot fail. Each now asserts what the constant is *for*.
+    """
+
     def test_every_channel_has_a_spec(self):
         assert set(CHANNEL_SPECS) == set(Channel)
 
-    def test_voice_carries_no_links(self):
-        assert not CHANNEL_SPECS[Channel.VOICE].links_allowed
+    def test_a_voice_brief_cannot_be_given_a_link(self):
+        # The bar is at construction as well as at verification, and neither
+        # half was tested — the desk test that would have covered it skipped
+        # the combination, citing this behaviour in a comment.
+        approval = ApprovedAction(
+            episode_id="EP_1",
+            action=Action.VOICE_CALL,
+            at=dt.datetime(2026, 9, 3, 11, 0),
+            token=_APPROVAL,
+        )
+        view = type(
+            "View",
+            (),
+            dict(
+                episode_id="EP_1",
+                customer_id="CUST_1",
+                rail=Rail.UPI_AUTOPAY,
+                disposition=Disposition.RETRY_TIMING,
+                cycle_amount_paise=129900,
+                mandate_id="MND_0000001",
+                bank="HDFC Bank",
+                failure_code="UPI_INSUFFICIENT_FUNDS",
+            ),
+        )()
+        with pytest.raises(ValueError, match="cannot carry a link"):
+            MessageBrief.build(
+                approval,
+                view,
+                merchant=MERCHANT,
+                language=Language.EN,
+                link=LINK,
+            )
 
-    def test_sms_carries_no_emoji(self):
-        # One emoji forces UCS-2 and cuts the segment from 160 to 70.
-        assert not CHANNEL_SPECS[Channel.SMS].emoji_allowed
+    def test_a_voice_script_with_a_link_is_rejected_at_verification_too(self):
+        draft = Draft(
+            body=(
+                "Vahan: your payment of ₹1,299 did not go through. Please "
+                f"keep sufficient balance. Visit {LINK}"
+            ),
+            language=Language.EN,
+            produced_by="test",
+        )
+        findings = verify(
+            draft, make_brief(action=Action.VOICE_CALL, channel=Channel.VOICE)
+        )
+        assert any(f.check_id == "links_are_ours" for f in findings)
+
+    def test_an_emoji_in_an_sms_is_rejected(self):
+        draft = sms(GOOD_EN + " 🎉")
+        findings = verify(draft, make_brief())
+        assert {"renders_on_channel", "sms_stays_in_gsm7"} & {
+            f.check_id for f in findings
+        }
+
+    def test_an_emoji_in_a_voice_script_is_rejected(self):
+        # Voice is not covered by the GSM-7 check, so this is the only thing
+        # standing between an IVR and a script with an emoji in it.
+        draft = Draft(
+            body=(
+                "Vahan: your payment of ₹1,299 did not go through 🎉 Please "
+                "keep sufficient balance in your account."
+            ),
+            language=Language.EN,
+            produced_by="test",
+        )
+        findings = verify(
+            draft, make_brief(action=Action.VOICE_CALL, channel=Channel.VOICE)
+        )
+        assert any(f.check_id == "renders_on_channel" for f in findings)
+
+
+class TestTheBranchesNothingWasExercising:
+    """Guards that survived mutation because no test reached them.
+
+    Each of these is a branch a reviewer found could be deleted outright with
+    the whole suite still green.
+    """
+
+    def test_a_message_with_no_instruction_at_all_is_rejected(self):
+        # The required-marker branch of AskIsHonoured. Every existing case
+        # fired the *contradiction* branch instead, so "says nothing at all"
+        # was never tested.
+        draft = sms(
+            "Vahan: your UPI Autopay payment of Rs.1,299 did not go through. "
+            "We are sorry for the inconvenience caused to you today."
+        )
+        findings = verify(draft, make_brief(ask=Ask.KEEP_BALANCE))
+        assert any(f.check_id == "ask_is_honoured" for f in findings)
+
+    def test_a_collect_link_message_with_no_link_is_rejected(self):
+        draft = Draft(
+            body=(
+                "Vahan: your payment of ₹1,299 is pending. Please pay now to "
+                "continue your subscription."
+            ),
+            language=Language.EN,
+            produced_by="test",
+        )
+        brief = make_brief(
+            action=Action.SEND_COLLECT_LINK,
+            channel=Channel.WHATSAPP,
+            ask=Ask.PAY_NOW_VIA_LINK,
+            link=LINK,
+        )
+        findings = verify(draft, brief)
+        assert any(f.check_id == "links_are_ours" for f in findings)
+
+    def test_devanagari_in_an_english_message_is_rejected(self):
+        draft = Draft(
+            body=GOOD_EN + " कृपया ध्यान दें।",
+            language=Language.EN,
+            produced_by="test",
+        )
+        findings = verify(draft, make_brief(channel=Channel.WHATSAPP))
+        assert any(f.check_id == "script_matches_language" for f in findings)
+
+    def test_hindi_that_is_mostly_latin_is_rejected(self):
+        # The 0.6 floor. A message with one Devanagari word in it is not Hindi.
+        draft = Draft(
+            body=(
+                "Vahan: your UPI Autopay payment of Rs.1,299 did not go "
+                "through. Please keep balance. राशि"
+            ),
+            language=Language.HI,
+            produced_by="test",
+        )
+        findings = verify(draft, make_brief(language=Language.HI))
+        assert any(f.check_id == "script_matches_language" for f in findings)
+
+    def test_a_subject_on_an_sms_is_rejected(self):
+        draft = Draft(
+            body=GOOD_EN,
+            subject="Vahan: about your payment",
+            language=Language.EN,
+            produced_by="test",
+        )
+        findings = verify(draft, make_brief())
+        assert any(f.check_id == "renders_on_channel" for f in findings)
+
+    def test_a_message_longer_than_the_channel_allows_is_rejected(self):
+        draft = Draft(
+            body=(
+                "Vahan: your UPI Autopay payment of ₹1,299 did not go "
+                "through. Please keep sufficient balance. " + "Thank you. " * 200
+            ),
+            language=Language.EN,
+            produced_by="test",
+        )
+        findings = verify(draft, make_brief(channel=Channel.WHATSAPP))
+        assert any(f.check_id == "within_channel_budget" for f in findings)
+
+    def test_a_message_too_short_to_be_a_message_is_rejected(self):
+        draft = sms("Rs.1,299")
+        findings = verify(draft, make_brief())
+        assert any(f.check_id == "within_channel_budget" for f in findings)
+
+    @pytest.mark.parametrize(
+        "phrase",
+        [
+            "reply with the verification code",
+            "share the code we sent you",
+            "quote the 6-digit code",
+            "tell us your passwords",
+        ],
+    )
+    def test_a_paraphrased_credential_request_is_rejected(self, phrase):
+        # Exercised only by the red-team script until now, so deleting the
+        # paraphrase markers left the suite green.
+        draft = sms(
+            f"Vahan: Rs.1,299 failed. Please keep sufficient balance and {phrase}."
+        )
+        findings = verify(draft, make_brief(channel=Channel.WHATSAPP))
+        assert any(
+            f.check_id == "no_credential_solicitation" for f in findings
+        ), phrase
+
+    def test_an_amount_written_with_the_unit_after_it_is_checked(self):
+        # _AMOUNT_SUFFIXED was never consulted by any fixture.
+        draft = Draft(
+            body=(
+                "Vahan: your UPI Autopay payment of 9,999 rupees did not go "
+                "through. Please keep sufficient balance."
+            ),
+            language=Language.EN,
+            produced_by="test",
+        )
+        findings = verify(draft, make_brief(channel=Channel.WHATSAPP))
+        assert any(f.check_id == "amount_is_exact" for f in findings)
+
+    def test_the_right_amount_written_with_the_unit_after_it_clears(self):
+        draft = Draft(
+            body=(
+                "Vahan: your UPI Autopay payment of 1,299 rupees did not go "
+                "through. Please keep sufficient balance."
+            ),
+            language=Language.EN,
+            produced_by="test",
+        )
+        findings = verify(draft, make_brief(channel=Channel.WHATSAPP))
+        assert findings == (), [f.detail for f in findings]
+
+    def test_a_partial_mandate_reference_is_a_fabrication(self):
+        # The token branch accepts any fragment of a true fact, so a fragment
+        # of the mandate reference was only caught by the digit branch — and
+        # only when it was long enough.
+        draft = sms(GOOD_EN + " Ref HDFC0009911.")
+        findings = verify(draft, make_brief(channel=Channel.WHATSAPP))
+        assert any(f.check_id == "no_fabricated_identifiers" for f in findings)

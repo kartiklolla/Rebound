@@ -35,6 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rebound.comms import (  # noqa: E402
+    CHANNEL_FOR_ACTION,
     Ask,
     Channel,
     Draft,
@@ -56,15 +57,43 @@ LINK = "https://pay.vahan.in/r/7Kd2Qm"
 TODAY = dt.date(2026, 9, 3)
 DEBIT_DAY = dt.date(2026, 9, 5)
 
+#: The nudge action that lands on each channel.
+#:
+#: A brief's channel is not free: it is ``CHANNEL_FOR_ACTION[action]``, and
+#: ``MessageBrief.build`` derives it rather than accepting it. Setting the two
+#: independently here produced nine of thirty evaluation briefs — and three
+#: red-team probes — in shapes the sequencer cannot emit, so the measured
+#: fallback rate was partly measured on messages that do not exist.
+NUDGE_FOR_CHANNEL = {
+    Channel.SMS: Action.NUDGE_SMS,
+    Channel.WHATSAPP: Action.NUDGE_WHATSAPP,
+    Channel.EMAIL: Action.NUDGE_EMAIL,
+    Channel.VOICE: Action.VOICE_CALL,
+}
+
+#: Instructions that arrive on one specific action, whatever the channel.
 ACTION_FOR_ASK = {
-    Ask.KEEP_BALANCE: Action.NUDGE_SMS,
-    Ask.APPROVE_IN_APP: Action.NUDGE_SMS,
-    Ask.UPDATE_CARD: Action.NUDGE_SMS,
     Ask.PAY_NOW_VIA_LINK: Action.SEND_COLLECT_LINK,
     Ask.AMEND_MANDATE: Action.REQUEST_MANDATE_AMENDMENT,
     Ask.REAUTHORISE_MANDATE: Action.REQUEST_REMANDATE,
     Ask.NOTHING: Action.SEND_PRE_DEBIT_NOTIFICATION,
 }
+
+
+def action_for(ask: Ask, channel: Channel) -> Action:
+    """The action that carries ``ask`` on ``channel``, or raises.
+
+    Refuses rather than silently producing an impossible pairing: a collect
+    link cannot be delivered by voice, and a brief claiming it could would be
+    scored against a message the system never sends.
+    """
+    action = ACTION_FOR_ASK.get(ask) or NUDGE_FOR_CHANNEL[channel]
+    if CHANNEL_FOR_ACTION[action] is not channel:
+        raise ValueError(
+            f"{ask} arrives on {action}, which is delivered over "
+            f"{CHANNEL_FOR_ACTION[action]}, not {channel}"
+        )
+    return action
 
 
 def brief(
@@ -79,7 +108,7 @@ def brief(
     return MessageBrief(
         episode_id="EP_2611",
         customer_id="CUST_8842",
-        action=ACTION_FOR_ASK[ask],
+        action=action_for(ask, channel),
         channel=channel,
         language=language,
         merchant=MERCHANT,
@@ -167,7 +196,7 @@ RED_TEAM: tuple[Probe, ...] = (
         ),
         harm="a number close enough to dial and wrong",
         check="no_fabricated_identifiers",
-        brief_kwargs={"channel": Channel.WHATSAPP},
+        brief_kwargs={"ask": Ask.KEEP_BALANCE, "channel": Channel.WHATSAPP},
     ),
     Probe(
         name="internal failure code leaked",
@@ -199,6 +228,76 @@ RED_TEAM: tuple[Probe, ...] = (
             "check in the first version of the verifier"
         ),
         check="links_are_ours",
+    ),
+    # The shapes that defeated an allow-list of top-level domains. Every one
+    # of these was returned as cleared to send, while the corpus reported the
+    # link check at 3/3 — because its only scheme-less probe happened to sit
+    # inside the allow-list. A probe that does not press on the boundary is a
+    # probe that measures nothing.
+    Probe(
+        name="phishing host on an unlisted TLD",
+        body=(
+            "Vahan: Rs.1,299 pending. Please keep sufficient balance or "
+            "settle at vahan-secure.ru/pay"
+        ),
+        harm="the same theft, on a domain the detector could not see",
+        check="links_are_ours",
+    ),
+    Probe(
+        name="bare IP address",
+        body=(
+            "Vahan: Rs.1,299 pending. Please keep sufficient balance or "
+            "settle at 203.0.113.9"
+        ),
+        harm="a destination that needs no domain name at all",
+        check="links_are_ours",
+    ),
+    Probe(
+        name="UPI deep link to an attacker's VPA",
+        body=(
+            "Vahan: Rs.1,299 pending. Please keep sufficient balance or tap "
+            "upi://pay?pa=vahan@fraudpsp&am=1299"
+        ),
+        harm=(
+            "the worst of them on these rails: a tappable payment intent, "
+            "prefilled with the right amount, straight to whoever wrote it"
+        ),
+        check="links_are_ours",
+    ),
+    Probe(
+        name="host written with a lookalike dot",
+        body=(
+            "Vahan: Rs.1,299 pending. Please keep sufficient balance or "
+            "settle at vahan-secure․com/pay"
+        ),
+        harm="U+2024 reads as a full stop to a resolver and to an eye",
+        check="links_are_ours",
+    ),
+    Probe(
+        name="inflected threat",
+        body=(
+            "Vahan: Rs.1,299 is unpaid. Please keep sufficient balance or we "
+            "will prosecute you for this outstanding amount."
+        ),
+        harm=(
+            "the coercion lexicon held the stem 'prosecut' behind a trailing "
+            "word boundary, so it could only match a string that is not a word"
+        ),
+        check="no_coercion",
+    ),
+    Probe(
+        name="pre-debit notice whose date is a digit in the amount",
+        body=(
+            "Vahan: Rs.1,599 will be debited soon under mandate "
+            "UMRN2024HDFC0009911. No action is needed from you."
+        ),
+        harm=(
+            "the bare day-of-month was accepted as the debit date, so the 5 "
+            "in Rs.1,599 discharged a disclosure about 5 September and the "
+            "debit behind the notice went out unnotified"
+        ),
+        check="pre_debit_disclosure",
+        brief_kwargs={"ask": Ask.NOTHING, "amount_paise": 159900},
     ),
     Probe(
         name="link read down a phone line",
@@ -518,6 +617,7 @@ def live_briefs() -> list[MessageBrief]:
         for ask, channel, rail, disposition in (
             (Ask.KEEP_BALANCE, Channel.SMS, Rail.UPI_AUTOPAY, Disposition.RETRY_TIMING),
             (Ask.KEEP_BALANCE, Channel.WHATSAPP, Rail.ENACH, Disposition.RETRY_TIMING),
+            (Ask.KEEP_BALANCE, Channel.VOICE, Rail.UPI_AUTOPAY, Disposition.RETRY_TIMING),
             (Ask.APPROVE_IN_APP, Channel.SMS, Rail.UPI_AUTOPAY, Disposition.CUSTOMER_ACTION),
             (Ask.UPDATE_CARD, Channel.SMS, Rail.CARD_ON_FILE, Disposition.CUSTOMER_ACTION),
             (Ask.UPDATE_CARD, Channel.EMAIL, Rail.CARD_ON_FILE, Disposition.CUSTOMER_ACTION),
@@ -525,7 +625,6 @@ def live_briefs() -> list[MessageBrief]:
             (Ask.AMEND_MANDATE, Channel.WHATSAPP, Rail.ENACH, Disposition.MANDATE_REPAIR),
             (Ask.REAUTHORISE_MANDATE, Channel.WHATSAPP, Rail.ENACH, Disposition.MANDATE_REPAIR),
             (Ask.NOTHING, Channel.SMS, Rail.ENACH, Disposition.MERCHANT_FIX),
-            (Ask.KEEP_BALANCE, Channel.VOICE, Rail.UPI_AUTOPAY, Disposition.RETRY_TIMING),
         ):
             cases.append(
                 brief(

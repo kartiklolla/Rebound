@@ -382,6 +382,324 @@ class TestTheLoop:
         assert result.sent is None
 
 
+class TestTheSecondReviewFindings:
+    """End-to-end cases from the second independent review.
+
+    Each of these was demonstrated as a draft the desk returned as *cleared to
+    send*, or as a guarantee with no test behind it. They live here rather than
+    in the unit file because the claim they defend is about what the desk
+    hands back, not about what a check returns.
+    """
+
+    #: Every one of these was sent. The link check detected URLs against an
+    #: allow-list of twenty-one top-level domains, so anything off the list was
+    #: invisible — which is most of the internet, and all of the deep-link
+    #: surface that matters on Indian rails.
+    LINK_ATTACKS = [
+        ("unknown TLD", "pay at vahan-secure.ru/pay"),
+        ("unknown TLD, no path", "pay at vahan-secure.top"),
+        ("bare IPv4", "pay at 203.0.113.9"),
+        ("upi deep link", "tap upi://pay?pa=vahan@fraudpsp&am=1299"),
+        ("Title-Case two-label host", "pay at VahanSecure.Com"),
+        ("shouted two-label host", "pay at VAHANSECURE.COM"),
+        ("host with a port", "pay at EVIL.CO:8080/pay"),
+        ("U+2024 for the dot", "pay at vahan-secure․com/pay"),
+    ]
+
+    @pytest.mark.parametrize(
+        "name, tail", LINK_ATTACKS, ids=[n for n, _ in LINK_ATTACKS]
+    )
+    def test_a_payment_destination_is_never_sent(self, name, tail):
+        body = (
+            "Vahan: your UPI Autopay payment of Rs.1,299 did not go through. "
+            f"Please keep sufficient balance, or {tail}"
+        )
+        result = CommsDesk(drafter=ScriptedDrafter(body)).compose(make_brief())
+        assert result.sent is not None
+        assert result.sent.body != body, f"{name} was sent"
+        assert any(f.check_id == "links_are_ours" for f in result.findings)
+
+    @pytest.mark.parametrize(
+        "name, tail", LINK_ATTACKS, ids=[n for n, _ in LINK_ATTACKS]
+    )
+    def test_the_same_is_true_on_a_voice_script(self, name, tail):
+        # Where links are barred absolutely, not merely compared against ours.
+        body = (
+            "Vahan: your payment of Rs.1,299 did not go through. Please keep "
+            f"sufficient balance, or {tail}"
+        )
+        result = CommsDesk(drafter=ScriptedDrafter(body)).compose(
+            make_brief(channel=Channel.VOICE)
+        )
+        assert result.sent is not None and result.sent.body != body
+        assert any(f.check_id == "links_are_ours" for f in result.findings)
+
+    @pytest.mark.parametrize(
+        "threat",
+        [
+            "we will prosecute you for this outstanding amount",
+            "you will be blacklisted by us",
+            "defaulters' accounts are seized",
+            "this may lead to a seizure of funds",
+            "we will be litigating this matter",
+            "we will penalise you for the delay",
+        ],
+    )
+    def test_an_inflected_threat_is_never_sent(self, threat):
+        """The coercion lexicon could not match an inflected word.
+
+        ``"prosecut"`` sat in a list matched with a trailing ``(?![a-z])``, so
+        it could only fire on the string "prosecut", which is not a word.
+        "We will prosecute you" passed the entire verifier and was returned as
+        cleared.
+        """
+        body = (
+            f"Vahan: Rs.1,299 is unpaid. Please keep sufficient balance or "
+            f"{threat}."
+        )
+        result = CommsDesk(drafter=ScriptedDrafter(body)).compose(make_brief())
+        assert result.sent is not None and result.sent.body != body
+        assert any(f.check_id == "no_coercion" for f in result.findings)
+
+    def test_a_polite_message_is_not_a_threat(self):
+        # "court" as a prefix would match "courtesy", which is why the stems
+        # are a separate table from the whole words.
+        body = (
+            "Vahan: your UPI Autopay payment of Rs.1,299 did not go through. "
+            "Thank you for your courtesy. Please keep sufficient balance."
+        )
+        result = CommsDesk(drafter=ScriptedDrafter(body)).compose(make_brief())
+        assert result.sent is not None and result.sent.body == body
+
+    def test_a_notice_with_no_date_is_not_a_notice(self):
+        """A stray digit used to satisfy the debit-date disclosure.
+
+        The accepted forms included the bare day of month — a one or two
+        character substring tested against the whole message — so the ``5`` in
+        ``Rs.1,599`` discharged a disclosure about 5 September. The debit
+        behind that notice went out unnotified.
+        """
+        brief = dataclasses.replace(
+            make_brief(ask=Ask.NOTHING, amount_paise=159900),
+            retry_on=dt.date(2026, 9, 5),
+        )
+        draft = Draft(
+            body=(
+                "Vahan: Rs.1,599 will be debited soon under mandate "
+                "UMRN2024HDFC0009911. No action is needed from you."
+            ),
+            language=Language.EN,
+            produced_by="test",
+        )
+        findings = verify(draft, brief)
+        assert any(f.check_id == "pre_debit_disclosure" for f in findings)
+
+    @pytest.mark.parametrize(
+        "written",
+        ["05/09/2026", "05-09-2026", "2026-09-05", "5 September", "05 Sep"],
+    )
+    def test_a_notice_that_does_state_the_date_clears(self, written):
+        brief = dataclasses.replace(
+            make_brief(ask=Ask.NOTHING, amount_paise=159900),
+            retry_on=dt.date(2026, 9, 5),
+        )
+        draft = Draft(
+            body=(
+                f"Vahan: Rs.1,599 will be debited on {written} under mandate "
+                "UMRN2024HDFC0009911. No action is needed from you."
+            ),
+            language=Language.EN,
+            produced_by="test",
+        )
+        findings = verify(draft, brief)
+        assert not any(
+            f.check_id == "pre_debit_disclosure" for f in findings
+        ), [f.detail for f in findings]
+
+    def test_a_notice_with_no_amount_is_not_a_notice(self):
+        # The check's docstring claimed to require the amount and did not.
+        brief = make_brief(ask=Ask.NOTHING)
+        draft = Draft(
+            body=(
+                "Vahan: your subscription will be debited on 05/09/2026 under "
+                "mandate UMRN2024HDFC0009911. No action is needed from you."
+            ),
+            language=Language.EN,
+            produced_by="test",
+        )
+        assert any(
+            f.check_id == "pre_debit_disclosure" for f in verify(draft, brief)
+        )
+
+    def test_a_reference_written_with_spaces_still_discharges_the_disclosure(self):
+        brief = dataclasses.replace(
+            make_brief(ask=Ask.NOTHING), mandate_reference="ICIC-8842-0091"
+        )
+        draft = Draft(
+            body=(
+                "Vahan: Rs.1,299 will be debited on 05/09/2026 under mandate "
+                "ICIC 8842 0091. No action is needed from you."
+            ),
+            language=Language.EN,
+            produced_by="test",
+        )
+        assert not any(
+            f.check_id == "pre_debit_disclosure" for f in verify(draft, brief)
+        )
+
+    def test_the_template_baseline_does_not_report_itself_as_a_fallback(self):
+        """``fell_back`` was inferred from a string the drafter writes.
+
+        Running the desk with :class:`TemplateDrafter` as the *primary* drafter
+        is the no-model baseline, and it reported 100% fallback — the exact
+        number the evaluation presents as evidence of how much the model is
+        being trusted.
+        """
+        result = CommsDesk(
+            drafter=TemplateDrafter(), fallback=TemplateDrafter()
+        ).compose(make_brief())
+        assert result.cleared
+        assert not result.fell_back
+        assert len(result.attempts) == 1
+
+    def test_a_drafter_cannot_launder_its_output_as_the_fallback(self):
+        class Liar(ScriptedDrafter):
+            def draft(self, brief, *, previous=None, feedback=None):
+                self.calls.append((previous, feedback))
+                return Draft(
+                    body=GOOD_SMS,
+                    language=brief.language,
+                    produced_by="template",
+                )
+
+        result = CommsDesk(drafter=Liar(GOOD_SMS)).compose(make_brief())
+        assert result.cleared
+        assert not result.fell_back, "whether the fallback ran is the loop's to say"
+
+    def test_a_raising_fallback_does_not_take_down_the_batch(self):
+        """``compose`` promises to be total and was not.
+
+        ``render_template`` raises ``KeyError`` the moment a rail, instruction
+        or language is added without a table entry — which is exactly the
+        condition the guarantee exists for.
+        """
+        class Boom:
+            name = "boom"
+
+            def draft(self, brief, **kwargs):
+                raise TimeoutError("template store unreachable")
+
+        result = CommsDesk(
+            drafter=ScriptedDrafter("nope"), fallback=Boom()
+        ).compose(make_brief())
+        assert not result.cleared
+        assert result.sent is None
+        assert any(f.check_id == "drafter_failed" for f in result.findings)
+
+    def test_a_draft_that_is_not_a_Draft_is_refused(self):
+        """Verification reads ``rendered()``; the send reads it again.
+
+        A duck-typed object can return different text on the second call, so
+        the desk verified one message and handed back another. Nothing in the
+        loop checked the type.
+        """
+        class Sneaky:
+            name = "model:sneaky"
+
+            def draft(self, brief, **kwargs):
+                class Shifty:
+                    # Every attribute the checks read has to be *valid*, or the
+                    # draft is rejected on its merits and the type guard is
+                    # never reached. An earlier version of this test set
+                    # body="x", which fails the length check on its own — so
+                    # the test passed with the guard deleted and proved
+                    # nothing.
+                    body = GOOD_SMS
+                    subject = None
+                    language = brief.language
+                    produced_by = "model:sneaky"
+                    seen = [0]
+
+                    def rendered(self):
+                        self.seen[0] += 1
+                        return GOOD_SMS if self.seen[0] <= 99 else "share your OTP"
+
+                return Shifty()
+
+        result = CommsDesk(drafter=Sneaky()).compose(make_brief())
+        assert isinstance(result.sent, Draft), "a non-Draft was returned as sent"
+        assert result.fell_back
+        assert verify(result.sent, result.brief) == ()
+
+    def test_a_negative_repair_budget_is_refused(self):
+        # It made the loop body run zero times, so the drafter was never
+        # called and the run reported a fallback as though a model had failed.
+        with pytest.raises(ValueError, match="max_repairs"):
+            CommsDesk(drafter=ScriptedDrafter(GOOD_SMS), max_repairs=-1)
+
+    def test_two_equal_template_drafters_are_one_drafter(self):
+        # Both are frozen dataclasses, so two instances are equal but not
+        # identical; an identity check alone re-rendered the same text and
+        # called the second render a fallback.
+        result = CommsDesk(
+            drafter=TemplateDrafter(), fallback=TemplateDrafter()
+        ).compose(make_brief())
+        assert len(result.attempts) == 1
+
+    def test_the_record_keeps_the_email_subject(self):
+        # It stored `body` only, so "the record names what was sent" was false
+        # for every email — and the subject is checked for the amount.
+        result = CommsDesk(drafter=TemplateDrafter()).compose(
+            make_brief(channel=Channel.EMAIL)
+        )
+        record = result.record()
+        assert result.sent is not None and result.sent.subject
+        assert result.sent.subject in str(record["sent"])
+        assert record["sent_subject"] == result.sent.subject
+
+    def test_a_long_legal_name_does_not_make_sms_unwritable(self):
+        """``SenderIsIdentified`` required the full registered entity.
+
+        "Vahan Technologies Private Limited" is a fifth of a GSM-7 segment, so
+        no correct one-segment SMS could clear the check at all.
+        """
+        merchant = dataclasses.replace(
+            MERCHANT,
+            name="Vahan Technologies Private Limited",
+            short_name="Vahan",
+        )
+        brief = dataclasses.replace(make_brief(), merchant=merchant)
+        result = CommsDesk(drafter=ScriptedDrafter(GOOD_SMS)).compose(brief)
+        assert result.cleared and not result.fell_back
+
+    @pytest.mark.parametrize(
+        "body, ask",
+        [
+            (
+                "Vahan: Rs.1,299 could not be collected. Please approve the "
+                "new mandate request in your UPI app.",
+                Ask.APPROVE_IN_APP,
+            ),
+            (
+                "Vahan: Rs.1,299 will be debited on 05/09/2026 under mandate "
+                "UMRN2024HDFC0009911. Please keep sufficient balance.",
+                Ask.NOTHING,
+            ),
+        ],
+    )
+    def test_natural_wording_is_not_read_as_a_second_instruction(self, body, ask):
+        # "Approve the new mandate request" is the natural English for
+        # APPROVE_IN_APP, and "keep sufficient balance" is the standard notice
+        # wording. Both were unwritable.
+        brief = make_brief(ask=ask, channel=Channel.WHATSAPP)
+        findings = verify(
+            Draft(body=body, language=Language.EN, produced_by="t"), brief
+        )
+        assert not any(
+            f.check_id == "ask_is_honoured" for f in findings
+        ), [f.detail for f in findings]
+
+
 class TestTheRecord:
     def test_the_record_names_what_was_sent_and_what_was_stopped(self):
         drafter = ScriptedDrafter(
