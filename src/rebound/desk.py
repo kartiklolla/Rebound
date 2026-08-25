@@ -409,10 +409,15 @@ class AnthropicDrafter:
         return self._parse(response, brief)
 
     def _parse(self, response: object, brief: MessageBrief) -> Draft:
+        # Every part guarded, because this runs on whatever the network
+        # returned. A block whose ``text`` was an int raised TypeError inside
+        # join, which is an exception from the parse path rather than an empty
+        # body and a clean fallback.
         text = "".join(
-            getattr(block, "text", "") or ""
+            block.text
             for block in getattr(response, "content", None) or ()
             if getattr(block, "type", None) == "text"
+            and isinstance(getattr(block, "text", None), str)
         ).strip()
         payload = _loads(text)
         body = payload.get("body")
@@ -491,22 +496,38 @@ class Composition:
     attempts: tuple[Attempt, ...]
     sent: Draft | None
 
+    used_fallback: bool = False
+    """Whether ``compose`` reached the fallback branch.
+
+    Recorded by the loop rather than inferred from the sent draft. It used to
+    be ``sent.produced_by == "template"``, which is a string the drafter writes
+    — so running the desk with :class:`TemplateDrafter` as the *primary*
+    drafter, which is the no-model baseline, reported 100% fallback for a run
+    that never fell back once. A drafter could also simply claim the name and
+    launder its own output as the safe path. Whether the fallback ran is a fact
+    about control flow and is the loop's to state.
+    """
+
     @property
     def cleared(self) -> bool:
         return self.sent is not None
 
     @property
     def fell_back(self) -> bool:
-        """Whether the message that went out came from the template."""
-        return self.sent is not None and self.sent.produced_by == "template"
+        """Whether the message that went out came from the fallback drafter."""
+        return self.cleared and self.used_fallback
 
     @property
     def repaired(self) -> bool:
-        """Whether a model draft failed and a later model draft succeeded."""
-        return (
-            self.cleared
-            and not self.fell_back
-            and any(not attempt.cleared for attempt in self.attempts)
+        """Whether a first draft failed and a later attempt cleared.
+
+        Does not require ``not fell_back``. A run that failed once, was
+        repaired, and then failed again and fell back was previously booked as
+        neither repaired nor anything else, which quietly lost the repair from
+        the tally.
+        """
+        return self.cleared and any(
+            not attempt.cleared for attempt in self.attempts
         )
 
     @property
@@ -520,6 +541,11 @@ class Composition:
         Carries the sent text and the rejected ones. The point of storing a
         rejection is that "the model tried to invent a reference number and was
         stopped" is only demonstrable if the attempt survives.
+
+        Stores ``rendered()`` rather than ``body``. An email subject is part of
+        what the checks read and part of what the customer receives, and
+        recording only the body meant "the record names what was sent" was
+        false for every email.
         """
         return {
             "episode_id": self.brief.episode_id,
@@ -531,11 +557,13 @@ class Composition:
             "cleared": self.cleared,
             "fell_back": self.fell_back,
             "attempts": len(self.attempts),
-            "sent": self.sent.body if self.sent else None,
+            "repaired": self.repaired,
+            "sent": self.sent.rendered() if self.sent else None,
+            "sent_subject": self.sent.subject if self.sent else None,
             "produced_by": self.sent.produced_by if self.sent else None,
             "rejected": tuple(
                 {
-                    "body": attempt.draft.body,
+                    "body": attempt.draft.rendered(),
                     "produced_by": attempt.draft.produced_by,
                     "failed": tuple(
                         (f.check_id, f.detail) for f in attempt.findings
@@ -563,47 +591,83 @@ class CommsDesk:
     fallback: Drafter = field(default_factory=TemplateDrafter)
     max_repairs: int = 1
 
+    def __post_init__(self) -> None:
+        if self.max_repairs < 0:
+            # A negative budget made the loop body run zero times, so the
+            # drafter was never called and the composition reported a clean
+            # fallback as though a model had been tried and had failed.
+            raise ValueError("max_repairs cannot be negative")
+
+    def _attempt(self, drafter: Drafter, brief: MessageBrief, **kwargs) -> Attempt:
+        """One call to a drafter, with everything that can go wrong contained."""
+        try:
+            draft = drafter.draft(brief, **kwargs)
+        except Exception as error:  # noqa: BLE001 - see the class docstring
+            return Attempt(
+                draft=Draft(
+                    body="",
+                    language=brief.language,
+                    produced_by=getattr(drafter, "name", "drafter"),
+                ),
+                findings=(_drafter_failed(error),),
+            )
+        if not isinstance(draft, Draft):
+            # Everything downstream — verification, the audit record, the send
+            # — assumes an immutable Draft. A duck-typed object whose
+            # ``rendered()`` returns one thing when verified and another when
+            # read back passes every check and delivers something else.
+            return Attempt(
+                draft=Draft(
+                    body="",
+                    language=brief.language,
+                    produced_by=getattr(drafter, "name", "drafter"),
+                ),
+                findings=(
+                    _drafter_failed(
+                        TypeError(
+                            f"returned {type(draft).__name__}, not a Draft"
+                        )
+                    ),
+                ),
+            )
+        return Attempt(draft=draft, findings=verify(draft, brief))
+
     def compose(self, brief: MessageBrief) -> Composition:
         attempts: list[Attempt] = []
         previous: Draft | None = None
         feedback: str | None = None
 
         for _ in range(1 + self.max_repairs):
-            try:
-                draft = self.drafter.draft(
-                    brief, previous=previous, feedback=feedback
-                )
-            except Exception as error:  # noqa: BLE001 - see the class docstring
-                attempts.append(
-                    Attempt(
-                        draft=Draft(
-                            body="",
-                            language=brief.language,
-                            produced_by=getattr(self.drafter, "name", "drafter"),
-                        ),
-                        findings=(_drafter_failed(error),),
-                    )
-                )
-                break
-            findings = verify(draft, brief)
-            attempts.append(Attempt(draft=draft, findings=findings))
-            if not findings:
+            attempt = self._attempt(
+                self.drafter, brief, previous=previous, feedback=feedback
+            )
+            attempts.append(attempt)
+            if attempt.cleared:
                 return Composition(
-                    brief=brief, attempts=tuple(attempts), sent=draft
+                    brief=brief,
+                    attempts=tuple(attempts),
+                    sent=attempt.draft,
+                    used_fallback=False,
                 )
-            previous, feedback = draft, feedback_for(findings)
+            if any(f.check_id == "drafter_failed" for f in attempt.findings):
+                break
+            previous, feedback = attempt.draft, feedback_for(attempt.findings)
 
-        if self.fallback is self.drafter:
-            # Nothing left to fall back to; the primary already failed.
+        if self.fallback is self.drafter or self.fallback == self.drafter:
+            # Nothing left to fall back to; the primary already failed. Value
+            # equality as well as identity, because both drafters are frozen
+            # dataclasses and two TemplateDrafter() instances are equal but not
+            # identical — an identity check alone re-rendered the same text and
+            # called the second one a fallback.
             return Composition(brief=brief, attempts=tuple(attempts), sent=None)
 
-        final = self.fallback.draft(brief)
-        findings = verify(final, brief)
-        attempts.append(Attempt(draft=final, findings=findings))
+        final = self._attempt(self.fallback, brief)
+        attempts.append(final)
         return Composition(
             brief=brief,
             attempts=tuple(attempts),
-            sent=None if findings else final,
+            sent=final.draft if final.cleared else None,
+            used_fallback=True,
         )
 
 

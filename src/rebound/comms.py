@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from .compliance import ApprovedAction
-from .taxonomy import Action, Disposition, Rail
+from .taxonomy import Action, Disposition, Rail, legal_actions
 
 __all__ = [
     "Ask",
@@ -311,6 +311,19 @@ class MerchantProfile:
     sender_id: str = ""
     """The six-character TRAI header an Indian transactional SMS is sent under."""
 
+    short_name: str = ""
+    """What the message actually signs off as. Defaults to :attr:`name`.
+
+    Separate because ``name`` is the legal entity — "Vahan Technologies Private
+    Limited" — and requiring that verbatim made a one-segment SMS impossible to
+    write: the sender check rejected every draft signing off as "Vahan", and no
+    correct message could have been produced at all.
+    """
+
+    @property
+    def signature(self) -> str:
+        return self.short_name or self.name
+
 
 _DIGIT_RUN = re.compile(r"\d+")
 
@@ -481,6 +494,14 @@ class MessageBrief:
         Structurally typed on ``view`` so this module does not depend on the
         simulator, matching :meth:`rebound.compliance.Request.from_view`.
         """
+        if not isinstance(approved, ApprovedAction):
+            raise TypeError(
+                "a brief needs a real ApprovedAction. Structural typing is "
+                "right for the episode record, which comes from whatever "
+                "system holds it, and wrong for the approval, which is the "
+                "only evidence the gate was consulted — anything with three "
+                "attributes would otherwise forge one."
+            )
         action = approved.action
         if action not in CHANNEL_FOR_ACTION:
             raise ValueError(
@@ -499,6 +520,26 @@ class MessageBrief:
             )
         rail: Rail = getattr(view, "rail")
         disposition: Disposition = getattr(view, "disposition")
+        failure_code: str | None = getattr(view, "failure_code", None)
+        # Compliance and structural legality are different questions, and the
+        # gate only answers the first. It has no rule about dispositions, so
+        # it approved REQUEST_REMANDATE on a RETRY_TIMING episode — an action
+        # the taxonomy calls meaningless there — and this class turned that
+        # into "set up your autopay mandate again" for a customer whose
+        # balance was briefly short. Nothing downstream could catch it: the
+        # message is internally consistent, quotes the right amount, and
+        # honours the instruction it was given. The instruction was wrong.
+        #
+        # The sequencer does restrict its candidates by disposition, so in the
+        # shipped path this never fires. That is the argument for checking it
+        # here rather than against it: the guarantee should not rest on one
+        # caller remembering.
+        if failure_code is not None and action not in legal_actions(failure_code):
+            raise ValueError(
+                f"{action} is not a legal action for {failure_code} "
+                f"({disposition}); the gate permits it but the taxonomy does "
+                "not, and a message is not the place to discover that"
+            )
         channel = CHANNEL_FOR_ACTION[action]
         if link is not None and not CHANNEL_SPECS[channel].links_allowed:
             raise ValueError(f"{channel} messages cannot carry a link")
