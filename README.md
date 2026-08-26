@@ -489,6 +489,13 @@ per episode.
 Everything in it is the shipped code — the totals come from the same rollout
 harness the Claim B table comes from, and the verdicts from the same gate.
 
+`scripts/dashboard.py` builds and serves the two-sided site: a customer portal
+with six test accounts, one per failure disposition, where every request is
+answered by the live gate and the live priced model; and an operations console
+showing what bound each decision, what the model weighed, and the batch's money
+and exception list. Nothing in that page recomputes a decision — a second
+implementation in JavaScript would be a second thing to keep in agreement.
+
 There was no such command until an outside evaluator pointed out that a reader
 could run the test suite and three analysis scripts and never once see the
 system do its job. It found a bug on its first run: the templates were still
@@ -497,7 +504,8 @@ a realistic merchant name pushed a Hindi SMS past its UCS-2 budget and the
 fallback failed — meaning nothing would have been sent at all.
 
 ```bash
-uv run pytest                              # 827 tests
+uv run python scripts/dashboard.py         # two-sided demo site on :8000
+uv run pytest                              # 838 tests
 uv run python scripts/evaluate_comms.py    # verifier red team, 28/28 + 5 holes
 uv run python scripts/holdout.py           # Claim B, five held-out seeds (slow)
 uv run python scripts/train_model.py       # Claim A, both splits

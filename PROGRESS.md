@@ -24,7 +24,7 @@
 | 09 | Sequencer / agent policy | ✅ done — held-out seeds, see Claim B |
 | 09a | Fitted Q-iteration | ✅ built, measured, **not shipped** — diagnosed |
 | 10 | LLM comms layer (Hinglish/multilingual) | ✅ done — 13 checks, 28/28 red team, 5 holes documented, 333 tests, 27/27 mutations, live path unrun |
-| 11 | Batch runner + demo dashboard | ⬜ not started |
+| 11 | Customer portal + operations dashboard | ✅ done — two-sided local site over a real batch, 838 tests |
 | 12 | README, metrics writeup, provenance table | 🟡 in progress — README and provenance doc written, final pass pending |
 
 Legend: ⬜ not started · 🟡 in progress · ✅ done
@@ -950,6 +950,52 @@ guard under test was never reached.
 Claim B were both produced by code that has since changed in ways that move
 them. They are being re-run; whatever comes back is what gets published,
 including if it is worse.
+
+### D34 - Permission is not worth, and some requests are not requests (2026-08-25)
+
+`rebound.portal` is the one part of this system that runs the other way round.
+Everywhere else the sequencer decides whether to contact someone and the
+customer is on the receiving end; here a customer opens the page they were
+linked to and asks for something. Two boundaries, both easy to get wrong in a
+way nobody would notice.
+
+**Permission is not the same as worth.** The gate says whether an action is
+allowed; the expected value says whether it is worth doing *unprompted*. A
+customer request only has to clear the first. Declining someone's own explicit
+request because the model does not expect it to pay for itself would be
+indefensible — that number was fitted on customers who did not ask, and someone
+who has opened the page and pressed the button is not that customer. The number
+is still computed and recorded, because "we did it anyway and here is what we
+thought it was worth" is defensible and "we did not compute it" is not. It
+fires in the shipped demo: one account's mandate-repair request prices at
+-Rs 129 and is done anyway.
+
+**Some requests are not requests.** Stop-contact returns `HONOURED` without the
+gate ever being consulted, and a test asserts the gate's audit is empty
+afterwards. There is no verdict, no rule to cite, and no circumstance in which
+the answer is no. Routing it through something that *could* refuse would encode
+the idea that it is ours to refuse, and the shape of the code is what people
+read fastest.
+
+Structural refusals come from the taxonomy before the gate is reached, and
+explain rather than refuse — a cancelled mandate is told it is cancelled, not
+that permission was denied.
+
+**The dashboard recomputes nothing.** Every verdict, probability and rupee
+figure on the page is produced in Python by the shipped modules and embedded as
+data. A second implementation in JavaScript would be a second thing to keep in
+agreement, and this project has twice shipped two things that were supposed to
+agree and did not — the identifier check's two branches, and the gate rule that
+disagreed with its neighbour about whether the original debit had happened.
+
+**And the last of the dead code.** `sample_failure`'s `notification_sent`
+parameter had no caller, so the branch returning
+`CARD_PRE_DEBIT_NOTIFICATION_MISSING` never executed — that code arrives
+through the failure mix, as a modelling choice rather than as a caused missing
+notice. Removed. The unreachable UPI-window branch in
+`DispositionAwareRules._merchant_fix` is replaced by an assertion: the only
+`MERCHANT_FIX` code is a card failure, so the branch could not fire, and leaving
+dead code that looks load-bearing teaches a reader to distrust the rest.
 
 ## Evaluation splits
 
