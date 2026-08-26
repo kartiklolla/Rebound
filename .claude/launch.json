@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dashboard",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["-m", "http.server", "8000", "--directory", "dashboard"],
+      "port": 8000
+    },
+    {
+      "name": "dashboard-rebuild",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["scripts/dashboard.py", "--port", "8001", "--no-open"],
+      "port": 8001
+    }
+  ]
+}

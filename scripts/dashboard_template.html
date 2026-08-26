@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vahan · Payments</title>
+<style>
+:root{
+  --navy:#0a1633; --navy-2:#132247; --blue:#1668e3; --blue-50:#eaf2fe;
+  --bg:#f4f6fa; --card:#ffffff; --line:#e4e8f0; --line-2:#eef1f6;
+  --ink:#0f1b33; --body:#475168; --mute:#7b8598;
+  --ok:#067647; --ok-bg:#e9f7f0; --warn:#b54708; --warn-bg:#fef6e7;
+  --bad:#b42318; --bad-bg:#fdeceb; --info:#1668e3; --info-bg:#eaf2fe;
+  --sh:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.06);
+  --sh-2:0 4px 12px rgba(16,24,40,.07),0 1px 3px rgba(16,24,40,.05);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);
+  font:15px/1.6 "Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  -webkit-font-smoothing:antialiased}
+.mono,code{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:.92em}
+.hide{display:none!important}
+h1,h2,h3,h4{margin:0;letter-spacing:-.015em}
+
+/* ============ bank chrome ============ */
+.topstrip{background:var(--navy);color:#c3cde3;font-size:12.5px}
+.topstrip .in{max-width:1160px;margin:0 auto;padding:7px 24px;
+  display:flex;gap:20px;align-items:center}
+.topstrip b{color:#fff;font-weight:600}
+.topstrip .r{margin-left:auto;display:flex;gap:20px}
+nav.main{background:var(--card);border-bottom:1px solid var(--line);
+  position:sticky;top:0;z-index:40;box-shadow:var(--sh)}
+nav.main .in{max-width:1160px;margin:0 auto;padding:0 24px;
+  display:flex;align-items:center;gap:34px;height:64px}
+.logo{display:flex;align-items:center;gap:10px;font-size:19px;font-weight:700;
+  color:var(--navy);letter-spacing:-.03em}
+.logo .mk{width:30px;height:30px;border-radius:8px;
+  background:linear-gradient(135deg,var(--blue),#0b47a8);
+  display:grid;place-items:center;color:#fff;font-size:15px;font-weight:800}
+.navlinks{display:flex;gap:2px;height:100%}
+.navlinks button{all:unset;padding:0 16px;display:flex;align-items:center;
+  cursor:pointer;color:var(--body);font-size:14.5px;font-weight:550;
+  border-bottom:2.5px solid transparent}
+.navlinks button:hover{color:var(--ink);background:var(--line-2)}
+.navlinks button[aria-current="page"]{color:var(--blue);
+  border-bottom-color:var(--blue)}
+.who{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:13.5px}
+.avatar{width:32px;height:32px;border-radius:50%;background:var(--blue-50);
+  color:var(--blue);display:grid;place-items:center;font-weight:700;font-size:13px}
+
+main{max-width:1160px;margin:0 auto;padding:26px 24px 90px}
+.crumb{color:var(--mute);font-size:13px;margin-bottom:16px}
+.crumb b{color:var(--body);font-weight:550}
+
+/* ============ surfaces ============ */
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+  box-shadow:var(--sh)}
+.pad{padding:22px}
+.cardhead{padding:16px 22px;border-bottom:1px solid var(--line-2);
+  display:flex;align-items:center;gap:12px}
+.cardhead h3{font-size:15px;font-weight:640}
+.cardhead .r{margin-left:auto;color:var(--mute);font-size:13px}
+.cols{display:grid;grid-template-columns:264px 1fr;gap:22px;align-items:start}
+@media(max-width:900px){.cols{grid-template-columns:1fr}}
+.stack>*+*{margin-top:18px}
+.lede{color:var(--body);font-size:14.5px;max-width:70ch;margin:6px 0 0}
+
+/* ============ account rail ============ */
+.rail{padding:8px}
+.rail .h{padding:10px 12px 6px;font-size:11px;font-weight:700;color:var(--mute);
+  letter-spacing:.09em;text-transform:uppercase}
+.acct{all:unset;display:flex;gap:11px;align-items:center;width:100%;
+  padding:11px 12px;border-radius:9px;cursor:pointer;box-sizing:border-box}
+.acct:hover{background:var(--line-2)}
+.acct[aria-selected="true"]{background:var(--blue-50);
+  box-shadow:inset 3px 0 0 var(--blue)}
+.acct .av{width:34px;height:34px;border-radius:50%;flex:none;display:grid;
+  place-items:center;font-weight:700;font-size:13px;background:#e8ecf4;color:var(--navy-2)}
+.acct[aria-selected="true"] .av{background:var(--blue);color:#fff}
+.acct .t{min-width:0}
+.acct .n{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.acct .s{color:var(--mute);font-size:12.5px;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+
+/* ============ hero ============ */
+.hero{background:linear-gradient(160deg,var(--navy) 0%,var(--navy-2) 100%);
+  color:#fff;border-radius:12px;padding:24px;box-shadow:var(--sh-2)}
+.hero .top{display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap}
+.hero .amt{font-size:34px;font-weight:700;letter-spacing:-.035em;
+  font-variant-numeric:tabular-nums;line-height:1.1}
+.hero .plan{color:#a9b8d6;font-size:14px;margin-top:5px}
+.hero .meta{display:flex;gap:26px;margin-top:20px;padding-top:18px;
+  border-top:1px solid rgba(255,255,255,.13);flex-wrap:wrap}
+.hero .meta div{font-size:13px}
+.hero .meta .k{color:#8ea2c8;font-size:11px;text-transform:uppercase;
+  letter-spacing:.08em;font-weight:600;margin-bottom:3px}
+.hero .meta .v{font-weight:550}
+.failchip{background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.2);
+  padding:5px 11px;border-radius:99px;font-size:12.5px;font-weight:600;
+  display:inline-flex;gap:7px;align-items:center;height:fit-content}
+.failchip::before{content:"";width:7px;height:7px;border-radius:50%;
+  background:#ff9b91;box-shadow:0 0 0 3px rgba(255,155,145,.22)}
+
+.explain{background:var(--info-bg);border:1px solid #cfe0fb;border-radius:10px;
+  padding:15px 17px;display:flex;gap:13px}
+.explain .i{width:22px;height:22px;border-radius:50%;background:var(--blue);
+  color:#fff;display:grid;place-items:center;font-size:13px;font-weight:700;flex:none}
+.explain p{margin:0;font-size:14.5px;color:#123a78}
+
+/* ============ actions ============ */
+.act{border:1px solid var(--line);border-radius:11px;background:var(--card);
+  overflow:hidden;transition:box-shadow .14s}
+.act+.act{margin-top:11px}
+.act:hover{box-shadow:var(--sh-2)}
+.act>summary{list-style:none;cursor:pointer;padding:16px 18px;display:flex;
+  align-items:center;gap:14px}
+.act>summary::-webkit-details-marker{display:none}
+.act .ico{width:38px;height:38px;border-radius:9px;flex:none;display:grid;
+  place-items:center;font-size:17px;background:var(--line-2)}
+.act .lab{font-weight:600;font-size:15px}
+.act .hint{color:var(--mute);font-size:13px;margin-top:1px}
+.act .rt{margin-left:auto;display:flex;align-items:center;gap:12px}
+.act .car{color:var(--mute);font-size:11px;transition:transform .15s}
+.act[open] .car{transform:rotate(180deg)}
+.act .inner{padding:4px 18px 18px;border-top:1px solid var(--line-2)}
+.reply{background:var(--bg);border-left:3px solid var(--blue);border-radius:8px;
+  padding:13px 15px;margin:14px 0 0;font-size:14.5px}
+
+/* ============ pipeline ============ */
+.pipe{display:flex;gap:6px;margin:16px 0 4px;flex-wrap:wrap}
+.step{flex:1;min-width:118px;border:1px solid var(--line);border-radius:9px;
+  padding:10px 12px;background:var(--card);position:relative}
+.step .n{font-size:10.5px;font-weight:700;letter-spacing:.08em;color:var(--mute);
+  text-transform:uppercase}
+.step .v{font-weight:640;font-size:13.5px;margin-top:3px}
+.step .d{color:var(--mute);font-size:11.5px;margin-top:1px}
+.step.on{border-color:var(--blue);background:var(--blue-50)}
+.step.stop{border-color:#f3b9b4;background:var(--bad-bg)}
+.step.warn{border-color:#f5d9a8;background:var(--warn-bg)}
+
+/* ============ chips ============ */
+.chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;
+  border-radius:99px;font-size:12px;font-weight:650;white-space:nowrap}
+.c-done{background:var(--ok-bg);color:var(--ok)}
+.c-scheduled{background:var(--warn-bg);color:var(--warn)}
+.c-declined{background:var(--bad-bg);color:var(--bad)}
+.c-honoured{background:var(--info-bg);color:var(--info)}
+.c-reg{background:#fdeceb;color:var(--bad)}
+.c-pol{background:#eef1f6;color:var(--body)}
+
+/* ============ phone ============ */
+.phones{display:flex;gap:16px;flex-wrap:wrap}
+.phone{width:245px;border:8px solid #10182b;border-radius:26px;background:#eef1f6;
+  padding:8px 8px 14px;box-shadow:var(--sh-2)}
+.phone .notch{width:52px;height:4px;background:#38415a;border-radius:99px;
+  margin:2px auto 9px}
+.phone .from{font-size:10.5px;color:var(--mute);text-align:center;margin-bottom:7px;
+  font-weight:600;letter-spacing:.03em}
+.bubble{background:#fff;border-radius:13px;padding:10px 12px;font-size:12.7px;
+  line-height:1.45;box-shadow:0 1px 2px rgba(16,24,40,.08)}
+.phone .cost{font-size:10.5px;color:var(--mute);margin-top:8px;text-align:center;
+  font-family:ui-monospace,monospace}
+
+/* ============ tables ============ */
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:11px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line-2);
+  white-space:nowrap}
+th{background:#fafbfd;color:var(--mute);font-size:11px;font-weight:700;
+  letter-spacing:.07em;text-transform:uppercase}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:#fafbfd}
+.num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,monospace}
+.pos{color:var(--ok);font-weight:600}.neg{color:var(--bad);font-weight:600}
+tr.me{background:var(--blue-50)!important}
+tr.me td:first-child{box-shadow:inset 3px 0 0 var(--blue);font-weight:650}
+
+/* ============ kpi ============ */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:14px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:11px;
+  padding:16px 18px;box-shadow:var(--sh)}
+.kpi .k{color:var(--mute);font-size:11px;font-weight:700;letter-spacing:.08em;
+  text-transform:uppercase}
+.kpi .v{font-size:27px;font-weight:700;margin-top:6px;letter-spacing:-.03em;
+  font-variant-numeric:tabular-nums;line-height:1.15}
+.kpi .n{color:var(--mute);font-size:12.5px;margin-top:3px}
+
+/* ============ misc ============ */
+.kv{display:grid;grid-template-columns:1fr auto;gap:7px 20px;font-size:13.5px;
+  max-width:400px}
+.kv dt{color:var(--body)}
+.kv dd{margin:0;font-variant-numeric:tabular-nums;font-weight:550;text-align:right}
+.kv .tot{border-top:1px solid var(--line);padding-top:8px;margin-top:2px;font-weight:700}
+.note{color:var(--mute);font-size:12.8px;margin:13px 0 0;padding-left:13px;
+  border-left:2px solid var(--line);max-width:80ch;line-height:1.62}
+.note b{color:var(--body)}
+.formula{background:var(--navy);color:#cfe0fb;border-radius:9px;padding:15px 17px;
+  font-family:ui-monospace,monospace;font-size:13.5px;overflow-x:auto}
+.formula em{color:#7fd1a8;font-style:normal}
+.bars{display:flex;height:11px;border-radius:6px;overflow:hidden;margin:12px 0 10px}
+.legend{display:flex;gap:20px;flex-wrap:wrap;font-size:13px;color:var(--body)}
+.legend b{color:var(--ink);font-variant-numeric:tabular-nums}
+.sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:7px}
+.secnote{background:#fafbfd;border:1px dashed var(--line);border-radius:10px;
+  padding:14px 17px;font-size:13px;color:var(--body);max-width:82ch}
+footer{background:var(--navy);color:#8ea2c8;font-size:12.5px;padding:26px 0}
+footer .in{max-width:1160px;margin:0 auto;padding:0 24px;line-height:1.7}
+h2.sec{font-size:12px;font-weight:700;color:var(--mute);letter-spacing:.09em;
+  text-transform:uppercase;margin:32px 0 12px}
+</style>
+</head>
+<body>
+
+<div class="topstrip"><div class="in">
+  <span>🔒 <b>Secure</b> · vahan.in</span>
+  <span class="r"><span id="support"></span><span>Simulated data — demo build</span></span>
+</div></div>
+
+<nav class="main"><div class="in">
+  <div class="logo"><span class="mk">V</span> Vahan</div>
+  <div class="navlinks">
+    <button aria-current="page" data-view="customer">My payments</button>
+    <button data-view="ops">Operations console</button>
+  </div>
+  <div class="who"><span id="whoName" style="color:var(--body)"></span>
+    <span class="avatar" id="whoAv"></span></div>
+</div></nav>
+
+<main>
+  <!-- ================= CUSTOMER ================= -->
+  <section id="customer">
+    <div class="crumb">Payments &nbsp;›&nbsp; Autopay &nbsp;›&nbsp; <b>Failed collection</b></div>
+    <div class="cols">
+      <aside class="card rail">
+        <div class="h">Demo accounts</div>
+        <div id="accts"></div>
+        <div class="h" style="padding-top:14px">Need help?</div>
+        <div style="padding:2px 12px 10px;color:var(--mute);font-size:12.5px"
+          id="helpLine"></div>
+      </aside>
+      <div id="portal" class="stack"></div>
+    </div>
+  </section>
+
+  <!-- ================= OPS ================= -->
+  <section id="ops" class="hide">
+    <div class="crumb">Operations &nbsp;›&nbsp; <b>Recovery console</b></div>
+    <h1 style="font-size:22px">Recovery console</h1>
+    <p class="lede">Every customer request that reached the gate, what bound it,
+      and what the model weighed — then the batch this console was built from.</p>
+
+    <div style="height:20px"></div>
+    <div class="kpis" id="kpis"></div>
+
+    <h2 class="sec">Request outcomes</h2>
+    <div class="card pad" id="outcomeCard"></div>
+
+    <h2 class="sec">What bound each decision</h2>
+    <div class="tw"><table id="ruleTable"></table></div>
+    <p class="note"><b>Regulatory</b> rules encode an external requirement and are
+      not ours to relax. <b>Policy</b> rules are our own restraint, and a merchant
+      could legitimately configure them differently. Keeping the two apart is what
+      stops a product decision borrowing a regulator's authority.</p>
+
+    <h2 class="sec">How the model grades an action</h2>
+    <div class="card pad" id="gradingCard"></div>
+
+    <h2 class="sec">Every request</h2>
+    <div class="tw"><table id="reqTable"></table></div>
+
+    <h2 class="sec">Batch result</h2>
+    <div class="tw"><table id="polTable"></table></div>
+    <p class="note" id="polNote"></p>
+
+    <h2 class="sec">Exceptions — what it could not recover</h2>
+    <div class="tw"><table id="excTable"></table></div>
+
+    <h2 class="sec">Audit trail</h2>
+    <div class="tw" style="max-height:400px;overflow-y:auto"><table id="auditTable"></table></div>
+    <p class="note">Every action the sequencer took, with the reason it gave at the
+      time. Truncated to the first 400 rows for this page.</p>
+  </section>
+</main>
+
+<footer><div class="in" id="foot"></div></footer>
+
+<script>
+const DATA = /*__DATA__*/null;
+const $=(s,r=document)=>r.querySelector(s);
+const el=(t,c,h)=>{const n=document.createElement(t);if(c)n.className=c;
+  if(h!==undefined)n.innerHTML=h;return n};
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',
+  '"':'&quot;'}[c]));
+const money=n=>(n<0?'−₹':'₹')+Math.abs(Math.round(n*100)/100)
+  .toLocaleString('en-IN',{maximumFractionDigits:2});
+const pct=n=>(n*100).toFixed(1)+'%';
+const initials=n=>n.split(' ').map(w=>w[0]).slice(0,2).join('');
+
+const ICON={retry_now:'↻',send_payment_link:'🔗',retry_after_payday:'📅',
+  update_my_mandate:'⚙',pause_contact:'🔕'};
+const HINT={retry_now:'Present the same debit again',
+  send_payment_link:'A one-time link, outside the mandate',
+  retry_after_payday:'Wait, then present at a permitted hour',
+  update_my_mandate:'Ask your bank to amend the standing instruction',
+  pause_contact:'No more messages about this payment'};
+const WORD={done:'Done',scheduled:'Scheduled',declined:'Not possible',
+  honoured:'Done'};
+
+document.querySelectorAll('.navlinks button').forEach(b=>{
+  b.onclick=()=>{
+    document.querySelectorAll('.navlinks button').forEach(x=>
+      x.removeAttribute('aria-current'));
+    b.setAttribute('aria-current','page');
+    $('#customer').classList.toggle('hide', b.dataset.view!=='customer');
+    $('#ops').classList.toggle('hide', b.dataset.view!=='ops');
+    window.scrollTo(0,0);
+  };
+});
+
+/* ---------------- customer ---------------- */
+let current=0;
+
+function renderAccounts(){
+  const box=$('#accts'); box.innerHTML='';
+  DATA.accounts.forEach((a,i)=>{
+    const b=el('button','acct');
+    b.setAttribute('aria-selected', i===current);
+    b.innerHTML=`<span class="av">${esc(initials(a.name))}</span>
+      <span class="t"><span class="n">${esc(a.name)}</span>
+      <span class="s">${esc(a.plan)}</span></span>`;
+    b.onclick=()=>{current=i;renderAccounts();renderPortal()};
+    box.appendChild(b);
+  });
+}
+
+function renderPortal(){
+  const a=DATA.accounts[current], box=$('#portal');
+  $('#whoName').textContent=a.name;
+  $('#whoAv').textContent=initials(a.name);
+  box.innerHTML='';
+
+  box.appendChild(el('div','hero',`
+    <div class="top">
+      <div>
+        <div class="amt">${esc(a.amount)}</div>
+        <div class="plan">${esc(a.plan)} · mandate ${esc(a.mandate)}</div>
+      </div>
+      <span class="failchip">Collection failed</span>
+    </div>
+    <div class="meta">
+      <div><div class="k">Method</div><div class="v">${esc(a.rail.replace(/_/g,' '))}</div></div>
+      <div><div class="k">Bank</div><div class="v">${esc(a.bank)}</div></div>
+      <div><div class="k">Attempted</div><div class="v">${esc(a.failed_at)}</div></div>
+      <div><div class="k">Reference</div><div class="v mono">${esc(a.mandate)}</div></div>
+    </div>`));
+
+  box.appendChild(el('div','explain',
+    `<span class="i">i</span><p>${esc(a.plain)}</p>`));
+
+  const act=el('div','card');
+  act.appendChild(el('div','cardhead',
+    `<h3>What would you like to do?</h3><span class="r">${a.answers.length} options</span>`));
+  const body=el('div','pad');
+  a.answers.forEach(x=>{
+    const d=el('details','act');
+    d.innerHTML=`<summary>
+        <span class="ico">${ICON[x.request]||'•'}</span>
+        <span><span class="lab">${esc(x.label)}</span>
+          <span class="hint">${esc(HINT[x.request]||'')}</span></span>
+        <span class="rt"><span class="chip c-${x.outcome}">${WORD[x.outcome]}</span>
+          <span class="car">▾</span></span>
+      </summary>
+      <div class="inner">
+        <div class="reply">${esc(x.headline)}</div>
+        ${renderPipeline(x)}${renderWhy(x)}
+      </div>`;
+    body.appendChild(d);
+  });
+  act.appendChild(body);
+  box.appendChild(act);
+
+  if(a.messages.length){
+    const m=el('div','card');
+    m.appendChild(el('div','cardhead',
+      `<h3>What we would send you</h3><span class="r">same message, three languages</span>`));
+    const p=el('div','pad');
+    p.appendChild(el('div','phones', a.messages.map(x=>`
+      <div class="phone"><div class="notch"></div>
+        <div class="from">${esc(x.channel.toUpperCase())} · ${esc(DATA.merchant)}</div>
+        <div class="bubble">${esc(x.body)}</div>
+        <div class="cost">${x.segments} seg · ${x.units} units · ${esc(x.encoding)}</div>
+      </div>`).join('')));
+    p.appendChild(el('p','note','English and Hinglish fit <b>one</b> GSM-7 segment. '+
+      'Hindi needs <b>two</b> — a single Devanagari character re-encodes the whole '+
+      'SMS as UCS-2 and the per-segment budget drops from 153 characters to 67. '+
+      'The same reminder costs twice as much to send, which is a large part of why '+
+      'Indian merchants write Hinglish.'));
+    m.appendChild(p);
+    box.appendChild(m);
+  }
+}
+
+function renderPipeline(x){
+  const legal = x.outcome!=='declined' || x.adjudicated;
+  const gated = x.adjudicated;
+  const cls = o => o==='declined'?'stop':o==='scheduled'?'warn':'on';
+  return `<div class="pipe">
+    <div class="step ${legal?'on':'stop'}"><div class="n">1 · Classify</div>
+      <div class="v">${legal?'Action is legal':'Not legal'}</div>
+      <div class="d">taxonomy</div></div>
+    <div class="step ${x.grading?'on':''}"><div class="n">2 · Price</div>
+      <div class="v">${x.grading?money(x.grading.expected_value):'—'}</div>
+      <div class="d">${x.grading?'expected value':'not priced'}</div></div>
+    <div class="step ${gated?cls(x.outcome):''}"><div class="n">3 · Adjudicate</div>
+      <div class="v">${gated?esc(x.outcome):'not adjudicated'}</div>
+      <div class="d">compliance gate</div></div>
+    <div class="step ${x.outcome==='declined'?'stop':'on'}"><div class="n">4 · Act</div>
+      <div class="v">${x.happens_at?esc(x.happens_at.split(',')[1]||'now'):
+        (x.outcome==='declined'?'stopped':'now')}</div>
+      <div class="d">${x.happens_at?esc(x.happens_at.split(',')[0]):'—'}</div></div>
+  </div>`;
+}
+
+function renderWhy(x){
+  let out='';
+  if(x.rulings.length){
+    out+=`<h2 class="sec" style="margin-top:20px">Rules consulted</h2>
+      <div class="tw"><table><thead><tr><th>Rule</th><th>Basis</th><th>Verdict</th>
+      <th>Reason</th></tr></thead><tbody>`+
+      x.rulings.map(r=>`<tr${r.binding?' class="me"':''}>
+        <td class="mono">${esc(r.rule)}</td>
+        <td>${r.basis==='regulatory'?'<span class="chip c-reg">regulatory</span>':
+          r.basis==='policy'?'<span class="chip c-pol">policy</span>':'—'}</td>
+        <td>${esc(r.verdict)}</td>
+        <td style="white-space:normal">${esc(r.reason)}</td></tr>`).join('')+
+      `</tbody></table></div>`;
+  }
+  if(x.grading){
+    const g=x.grading;
+    out+=`<h2 class="sec">What the model thought it was worth</h2>
+      <dl class="kv">
+        <dt>Probability this episode is recovered</dt><dd>${g.p_recover.toFixed(3)}</dd>
+        <dt>Probability this action loses the mandate</dt><dd>${g.p_revoke.toFixed(3)}</dd>
+        <dt>Value of a recovery</dt><dd>${money(g.recovery_value)}</dd>
+        <dt>Charge if revoked</dt><dd>−${money(g.revocation_charge).replace('₹','₹')}</dd>
+        <dt>Contact fatigue</dt><dd>−${money(g.fatigue)}</dd>
+        <dt>Cost</dt><dd>−${money(g.cost)}</dd>
+        <dt class="tot">Expected value</dt>
+        <dd class="tot ${g.expected_value>=0?'pos':'neg'}">${money(g.expected_value)}</dd>
+      </dl>
+      <p class="note">${g.worth_unprompted
+        ?'We would have chosen this ourselves.'
+        :'We would <b>not</b> have done this unprompted — but you asked, the gate '+
+         'permits it, and it is not ours to refuse on the grounds that our model '+
+         'does not expect it to pay for itself. That number was fitted on customers '+
+         'who did not ask. It is recorded either way.'}</p>`;
+  }
+  out+=`<p class="note mono" style="margin-top:14px">${esc(x.detail)}</p>`;
+  return out;
+}
+
+/* ---------------- ops ---------------- */
+function renderOps(){
+  const r=DATA.requests, p=DATA.policies;
+  const ours=p.rows.find(x=>x.policy==='rebound_sequencer');
+  const lad=p.rows.find(x=>x.policy==='fixed_ladder');
+  const permitted=(r.outcomes.done||0)+(r.outcomes.scheduled||0)+(r.outcomes.honoured||0);
+
+  $('#kpis').innerHTML=[
+    ['Requests handled',r.total,DATA.accounts.length+' accounts'],
+    ['Permitted',pct(permitted/r.total),permitted+' of '+r.total],
+    ['Episodes worked',DATA.episodes.toLocaleString('en-IN'),'this batch'],
+    ['Recovery rate',pct(ours.recovery),'ladder '+pct(lad.recovery)],
+    ['Net ₹ / 1000',money(ours.net),(ours.gap>=0?'+':'−')+money(Math.abs(ours.gap))+' vs ladder'],
+    ['Unrecovered',p.unrecovered.toLocaleString('en-IN'),'each with a reason'],
+  ].map(([k,v,n])=>`<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div>
+    <div class="n">${esc(n)}</div></div>`).join('');
+
+  const C={done:'#067647',scheduled:'#b54708',honoured:'#1668e3',declined:'#b42318'};
+  const order=['done','scheduled','honoured','declined'].filter(k=>r.outcomes[k]);
+  $('#outcomeCard').innerHTML=
+    `<div class="bars">`+order.map(k=>
+      `<i style="flex:${r.outcomes[k]};background:${C[k]}"></i>`).join('')+
+    `</div><div class="legend">`+order.map(k=>
+      `<span><span class="sw" style="background:${C[k]}"></span>${k} <b>${r.outcomes[k]}</b></span>`
+    ).join('')+`</div>
+    <p class="note"><b>Declined is not a failure rate.</b> A request is declined when
+      the taxonomy says the action is meaningless for that failure — you cannot retry
+      a cancelled mandate — or when a regulatory rule forbids it. Both are the system
+      working. <b>Honoured</b> was never adjudicated at all: a request to stop being
+      messaged is not ours to refuse, so no rule is consulted and none is cited.</p>`;
+
+  $('#ruleTable').innerHTML=`<thead><tr><th>Binding rule</th>
+    <th class="num">Times</th></tr></thead><tbody>`+
+    (r.binding_rules.length?r.binding_rules.map(([k,v])=>
+      `<tr><td class="mono">${esc(k)}</td><td class="num">${v}</td></tr>`).join('')
+      :`<tr><td colspan="2" style="color:var(--mute)">No rule objected.</td></tr>`)+
+    `</tbody>`;
+
+  const g=DATA.grading;
+  $('#gradingCard').innerHTML=`
+    <div class="formula">EV = <em>p_recover</em> × (amount + h·D) − <em>p_revoke</em> × D(1−h) − fatigue − cost</div>
+    <div class="tw" style="margin-top:15px"><table><thead><tr><th>Term</th>
+      <th>What it is</th></tr></thead><tbody>`+
+    g.terms.map(([k,v])=>`<tr><td class="mono">${esc(k)}</td>
+      <td style="white-space:normal">${esc(v)}</td></tr>`).join('')+
+    `</tbody></table></div>
+    <p class="note"><b>Two heads, not one.</b> The action head predicts whether the
+      <i>episode</i> ends recovered; a separate revocation head predicts whether
+      <i>this action</i> loses the mandate. <code>h = ${g.passive_revocation_rate}</code>
+      is the measured rate at which an unrecovered customer churns on their own — it is
+      why a recovery is worth more than the cycle it collects, and why a revocation is
+      charged only for the churn that was not already coming.</p>
+    <p class="note">The model sees <b>${g.features.length} features</b>, all of them
+      things a merchant's own systems would know. The simulator's customer latents —
+      salary day, balance health, churn intent — are its answer key and are never
+      exposed to the model or the policy.</p>`;
+
+  const rows=[]; DATA.accounts.forEach(a=>a.answers.forEach(x=>rows.push([a,x])));
+  $('#reqTable').innerHTML=`<thead><tr><th>Customer</th><th>Request</th><th>Action</th>
+    <th>Outcome</th><th>Bound by</th><th class="num">Expected value</th>
+    <th>Scheduled</th></tr></thead><tbody>`+
+    rows.map(([a,x])=>{
+      const b=x.rulings.find(r=>r.binding&&r.rule!=='—');
+      return `<tr><td>${esc(a.name)}</td><td>${esc(x.label)}</td>
+        <td class="mono" style="color:var(--mute)">${esc(x.action||'—')}</td>
+        <td><span class="chip c-${x.outcome}">${x.outcome}</span></td>
+        <td class="mono" style="color:var(--mute)">${esc(b?b.rule:(x.adjudicated?'—':'not adjudicated'))}</td>
+        <td class="num ${x.grading?(x.grading.expected_value>=0?'pos':'neg'):''}">${
+          x.grading?money(x.grading.expected_value):'—'}</td>
+        <td style="color:var(--mute)">${esc(x.happens_at||'—')}</td></tr>`;
+    }).join('')+`</tbody>`;
+
+  $('#polTable').innerHTML=`<thead><tr><th>Policy</th><th class="num">Recovery</th>
+    <th class="num">Revoked</th><th class="num">Contacts/ep</th>
+    <th class="num">Recovered</th><th class="num">Spent</th><th class="num">Destroyed</th>
+    <th class="num">Net ₹/1000</th><th class="num">vs ladder</th></tr></thead><tbody>`+
+    p.rows.map(x=>`<tr${x.policy==='rebound_sequencer'?' class="me"':''}>
+      <td class="mono">${esc(x.policy)}</td><td class="num">${pct(x.recovery)}</td>
+      <td class="num">${pct(x.revocation)}</td><td class="num">${x.contacts.toFixed(2)}</td>
+      <td class="num">${money(x.recovered)}</td><td class="num">${money(x.spent)}</td>
+      <td class="num">${money(x.destroyed)}</td>
+      <td class="num ${x.net>=0?'pos':'neg'}">${money(x.net)}</td>
+      <td class="num ${x.gap>=0?'pos':'neg'}">${x.policy==='fixed_ladder'?'—':
+        (x.gap>=0?'+':'−')+money(Math.abs(x.gap))}</td></tr>`).join('')+`</tbody>`;
+
+  const neg=p.rows.filter(x=>x.net<0).length;
+  $('#polNote').innerHTML=`${neg} of ${p.rows.length} policies score negative on this
+    batch — "ahead" means less bad, not profitable. <b>This is one seed at reduced
+    scale</b>, shown so the page builds quickly. The reported claim is five held-out
+    seeds at full scale: mean <b>+40,916</b> ₹/1000, sd 37,262, <b>not statistically
+    significant</b> (t = 2.46 on 4 df, p ≈ 0.07), and <b>negative on one of the five</b>.
+    Reproduce with <code>scripts/holdout.py</code>.`;
+
+  $('#excTable').innerHTML=`<thead><tr><th>Reason</th><th class="num">Episodes</th>
+    <th class="num">Share</th></tr></thead><tbody>`+
+    p.exceptions.map(x=>`<tr><td style="white-space:normal">${esc(x.reason)}</td>
+      <td class="num">${x.count}</td><td class="num">${pct(x.share)}</td></tr>`).join('')+
+    `</tbody>`;
+
+  $('#auditTable').innerHTML=`<thead><tr><th>Episode</th><th class="num">Step</th>
+    <th>When</th><th>Action</th><th>Because</th><th>Outcome</th>
+    <th class="num">Cost</th></tr></thead><tbody>`+
+    p.audit.map(x=>`<tr><td class="mono" style="color:var(--mute)">${esc(x.episode)}</td>
+      <td class="num">${x.step}</td><td style="color:var(--mute)">${esc(x.at)}</td>
+      <td class="mono">${esc(x.action)}</td>
+      <td style="white-space:normal;color:var(--body)">${esc(x.reason)}</td>
+      <td>${x.succeeded?'<span class="chip c-done">recovered</span>':
+        x.revoked?'<span class="chip c-declined">revoked</span>':
+        '<span style="color:var(--mute)">'+esc(x.detail)+'</span>'}</td>
+      <td class="num">${money(x.cost)}</td></tr>`).join('')+`</tbody>`;
+}
+
+/* ---------------- boot ---------------- */
+$('#support').textContent='Help: '+(DATA.support||'1800 267 0001');
+$('#helpLine').innerHTML='Call <b>'+(DATA.support||'1800 267 0001')+
+  '</b><br>We never ask for an OTP, PIN or CVV.';
+$('#foot').innerHTML=`<b style="color:#fff">Rebound</b> — recovery orchestrator for
+  failed recurring debits on Indian payment rails. Built ${esc(DATA.generated_at)}.<br>
+  Every verdict, probability and rupee figure on this page was computed in Python by
+  the shipped modules and embedded as data. Nothing here recomputes a decision in the
+  browser — a second implementation would be a second thing to keep in agreement.<br>
+  Simulated data throughout: the account names are invented, the failed debits behind
+  them are real outputs of the generator.`;
+renderAccounts(); renderPortal(); renderOps();
+</script>
+</body>
+</html>

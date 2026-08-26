@@ -24,3 +24,7 @@ JOURNAL.md
 .vscode/
 .idea/
 .DS_Store
+
+
+# Claude Code worktrees (launch.json is committed; these are not)
+.claude/worktrees/
