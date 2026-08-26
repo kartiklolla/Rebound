@@ -237,6 +237,15 @@ class Episode:
     customer_unblocked: bool = False
     """Set when the customer clears whatever was blocking the debit."""
 
+    contact_suppressed: bool = False
+    """The customer asked not to be contacted about this payment.
+
+    Honoured unconditionally by ``rebound.portal`` and enforced by
+    ``compliance.ContactSuppressed``. It lives on the episode rather than in
+    the portal because a promise the rest of the system cannot see is not a
+    promise — an outside reviewer found this returning "we will not message
+    you again" with nothing anywhere that could stop the next nudge."""
+
     notification_sent_at: dt.datetime | None = None
     outage_ends_at: dt.datetime | None = None
     mandate_repaired: bool = False
@@ -284,6 +293,7 @@ class Episode:
             spent_paise=self.ledger.spent_paise,
             notification_sent_at=self.notification_sent_at,
             customer_unblocked=self.customer_unblocked,
+            contact_suppressed=self.contact_suppressed,
             mandate_repaired=self.mandate_repaired,
             history=tuple(self.history),
         )
@@ -340,6 +350,10 @@ class EpisodeView:
     mandate_repaired: bool
 
     history: tuple[ActionOutcome, ...]
+
+    contact_suppressed: bool = False
+    """The customer asked not to be contacted about this payment. Enforced by
+    ``compliance.ContactSuppressed``; see ``Episode.contact_suppressed``."""
 
     @property
     def steps_taken(self) -> int:

@@ -215,6 +215,15 @@ class Request:
     action: Action
     at: dt.datetime
 
+    contact_suppressed: bool = False
+    """The customer asked us to stop contacting them about this payment.
+
+    Defaulted rather than required, and placed last, so that adding an
+    enforcement mechanism did not force a rewrite of every construction site —
+    including the fixtures whose job is to start from a request every rule
+    permits. A request that does not mention suppression is not suppressed.
+    """
+
     def __post_init__(self) -> None:
         if self.at.tzinfo is not None:
             raise ValueError(
@@ -264,6 +273,7 @@ class Request:
                 if outcome.action in DEBIT_ACTIONS
             ),
             contacts_made=getattr(view, "contacts_made"),
+            contact_suppressed=getattr(view, "contact_suppressed", False),
             spent_paise=getattr(view, "spent_paise"),
             notification_sent_at=getattr(view, "notification_sent_at"),
             action=action,
@@ -520,6 +530,44 @@ class RetryCap:
 
 
 @dataclass(frozen=True, slots=True)
+class ContactSuppressed:
+    """The customer asked us to stop, so we stop.
+
+    Policy rather than regulatory, because no regulator imposed it — but it is
+    the one policy rule that is not ours to relax, and a merchant who disabled
+    it would be breaking a promise this system made in writing.
+
+    It exists because the promise had no mechanism. ``portal.answer`` returned
+    "we will not message you about this payment again" and nothing anywhere
+    could stop the next nudge: no flag on the episode, no rule here, no check
+    in the sequencer. An unenforceable undertaking on a system whose pitch is
+    contact discipline is the one a compliance-minded reader finds first.
+
+    ``STOP`` and the pre-debit notice are exempt through ``_ALWAYS_PERMITTED``:
+    a notice is a disclosure the following debit depends on, not collection
+    pressure, and a gate that can deny ``STOP`` can trap an episode open.
+    """
+
+    rule_id: str = "POL.CONTACT_SUPPRESSED"
+    basis: Basis = Basis.POLICY
+    source_key: str = ""
+
+    def check(self, request: Request) -> Ruling | None:
+        if request.action in _ALWAYS_PERMITTED:
+            return None
+        if not request.contact_suppressed:
+            return None
+        if request.action not in CUSTOMER_FACING_ACTIONS:
+            return None
+        return Ruling(
+            self.rule_id,
+            self.basis,
+            Verdict.DENY,
+            "the customer asked not to be contacted about this payment",
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class QuietHours:
     """No collection pressure overnight.
 
@@ -671,6 +719,7 @@ DEFAULT_RULES: tuple[Rule, ...] = (
     ExecutionWindow(),
     RetryCap(),
     QuietHours(),
+    ContactSuppressed(),
     ContactCap(),
     SpendBudget(),
     TerminalStop(),
