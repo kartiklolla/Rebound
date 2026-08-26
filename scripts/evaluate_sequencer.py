@@ -82,7 +82,7 @@ def main() -> None:
     if QUICK:
         banner(
             "QUICK MODE — REDUCED SCALE\n"
-            "These figures are NOT the reported ones. Policy ordering holds; "
+            "These figures are NOT the reported ones, and the policy ordering does NOT hold at this scale — the ladder beats every learned policy here. Use quick mode to check the code runs, never to compare policies. "
             "magnitudes do not.\nRun without --quick to reproduce the README."
         )
     banner("FITTING THE SEQUENCER'S MODELS")
@@ -215,12 +215,31 @@ def main() -> None:
         print(f"  difference                    {ours - base:>12,.0f}")
         if learned_q is not None:
             print(f"\n  fitted Q-iteration:           {learned_q:>12,.0f}")
+            # Read off this run, not asserted. An earlier version printed "the
+            # hand-built expected value beat it 4/4" unconditionally — and in
+            # quick mode Q is routinely ahead, so the caption contradicted the
+            # table directly above it. That is the same defect as the +100.0%
+            # incident this script was rewritten to prevent, arriving as prose
+            # instead of arithmetic.
+            if learned_q > ours:
+                print(
+                    "  On THIS run Q is ahead of the shipped policy by "
+                    f"{learned_q - ours:,.0f}. That does not overturn the\n"
+                    "  reported result — across four full-scale seeds the "
+                    "hand-built expected value\n  beat it 4/4 and Q went "
+                    "negative on one — but at reduced scale the ordering is\n"
+                    "  noise, which is why quick mode is not a comparison."
+                )
+            else:
+                print(
+                    "  Q is behind the shipped policy here, consistent with the "
+                    "full-scale result:\n  the hand-built expected value beat "
+                    "it 4/4 across four seeds."
+                )
             print(
-                "  Q is reported, not shipped. Across four full-scale seeds the\n"
-                "  hand-built expected value beat it 4/4 (mean gap over the ladder\n"
-                "  +164,807 vs +100,876), and Q went negative on one seed. See\n"
-                "  rebound.fqi for why: 68% of its decisions fall outside the\n"
-                "  training support on days_since_failure."
+                "  Q is reported, not shipped. See rebound.fqi: 68% of its\n"
+                "  decisions fall outside the training support on "
+                "days_since_failure."
             )
         # No percentage. Both figures can be negative, and a ratio of two
         # negatives reads as a gain when the second is worse than the first.

@@ -298,6 +298,23 @@ def show_batch(world: World, batch, pricer) -> None:
             f"{r.contacts_per_episode:>10.2f}{r.net_rupees_per_1000:>14,.0f}"
             f"{gap_text:>12}"
         )
+    # Narrated from this table, never asserted over it. An earlier version
+    # printed "the gap between policies is the part that is stable" directly
+    # underneath a run where a baseline had beaten the sequencer by 70,000 —
+    # a printed line contradicting the table above it, which is exactly the
+    # failure the +100.0% incident is remembered for.
+    leader = rows[0][0]
+    if leader != "rebound_sequencer":
+        print(
+            f"\n  On this batch **{leader}** — a baseline — is ahead of the\n"
+            "  sequencer. That happens at reduced scale and it is not hidden "
+            "here.\n  The reported claim is five held-out seeds at full scale, "
+            "where the\n  sequencer leads on four of five; run scripts/holdout.py "
+            "to check it.\n  A single small batch is not evidence about policy "
+            "ordering in either\n  direction, which is the whole reason the "
+            "claim is measured on five."
+        )
+
     negatives = sum(
         1 for _, r in rows if r.report.net_rupees_per_1000 < 0
     )
@@ -309,10 +326,10 @@ def show_batch(world: World, batch, pricer) -> None:
     else:
         print(
             f"\n  {negatives} of {len(rows)} policies score negative on this"
-            " batch. Whether the\n  top of the table is above or below zero"
-            " moves with the seed; the gap\n  between policies is the part"
-            " that is stable, which is why Claim B is\n  reported as a"
-            " difference and never as a ratio."
+            " batch. Whether any\n  given row sits above or below zero moves"
+            " with the seed, which is why\n  Claim B is reported as a"
+            " difference and never as a ratio — a ratio of\n  two negatives"
+            " reads as a gain when the second is worse than the first."
         )
     print(
         "\n  This is one seed at reduced scale. The reported claim is five"
