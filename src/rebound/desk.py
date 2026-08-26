@@ -29,7 +29,7 @@ than a number.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from .comms import (
@@ -192,6 +192,14 @@ _NOTICE_SUBJECTS: dict[Language, str] = {
 def render_template(brief: MessageBrief) -> Draft:
     """The deterministic message for a brief. Always passes verification.
 
+    Signs with ``merchant.signature``, not ``merchant.name``. The sender check
+    was moved off the legal entity when it turned out that "Vahan Technologies
+    Private Limited" is a fifth of a GSM-7 segment; the templates were not, so
+    they kept emitting it — and a Hindi SMS, already on a 134-unit UCS-2 budget,
+    went over. The fallback failed, which means nothing at all would have been
+    sent. Found by running scripts/demo.py with a realistic merchant name, on
+    the first attempt.
+
     "Always" is asserted rather than asserted-to: ``test_desk`` renders every
     instruction against every channel and language and runs the full check set
     over each one. A fallback that can fail is not a fallback.
@@ -202,14 +210,14 @@ def render_template(brief: MessageBrief) -> Draft:
 
     if brief.ask is Ask.NOTHING and brief.retry_on is not None:
         body = _NOTICE[language].format(
-            merchant=brief.merchant.name,
+            merchant=brief.merchant.signature,
             amount=amount,
             date=date,
             reference=brief.mandate_reference,
         )
     else:
         lead = _LEAD[language].format(
-            merchant=brief.merchant.name,
+            merchant=brief.merchant.signature,
             rail=_RAIL_WORDS[brief.rail][language],
             amount=amount,
         )
@@ -227,7 +235,7 @@ def render_template(brief: MessageBrief) -> Draft:
             _NOTICE_SUBJECTS if brief.ask is Ask.NOTHING and brief.retry_on else _SUBJECTS
         )
         subject = template[language].format(
-            merchant=brief.merchant.name, amount=amount, date=date
+            merchant=brief.merchant.signature, amount=amount, date=date
         )
 
     return Draft(
@@ -295,7 +303,7 @@ the brief says a subject is required.\
 
 def _brief_prompt(brief: MessageBrief) -> str:
     lines = [
-        f"MERCHANT: {brief.merchant.name}",
+        f"MERCHANT: {brief.merchant.signature}",
         f"AMOUNT: write it exactly as {brief.amount_text}",
         f"CHANNEL: {brief.channel}",
         f"LANGUAGE: {brief.language}",
@@ -599,9 +607,26 @@ class CommsDesk:
             raise ValueError("max_repairs cannot be negative")
 
     def _attempt(self, drafter: Drafter, brief: MessageBrief, **kwargs) -> Attempt:
-        """One call to a drafter, with everything that can go wrong contained."""
+        """One call to a drafter, with everything that can go wrong contained.
+
+        The drafter is handed a *copy* of the brief and the original is what
+        the draft is verified against. ``MessageBrief`` is frozen, which stops
+        assignment but not ``object.__setattr__`` — so a drafter could rewrite
+        ``brief.link`` to a host it controlled, quote the new value, and have
+        the verifier confirm the message matched the brief. It did: a phishing
+        host came back from ``compose`` cleared, with ``fell_back=False``. The
+        check was not evaded; the ground truth was moved.
+
+        Structurally the same defect the harness had, where the report was read
+        off the object handed to the untrusted component. That was fixed by
+        cutting the object graph with ``EpisodeView``; this cuts it with a copy.
+
+        A real ``AnthropicDrafter`` cannot do this — a model returns text, not
+        code — but ``Drafter`` is an exported extension point, and a guarantee
+        that holds only for the implementations shipped today is not one.
+        """
         try:
-            draft = drafter.draft(brief, **kwargs)
+            draft = drafter.draft(replace(brief), **kwargs)
         except Exception as error:  # noqa: BLE001 - see the class docstring
             return Attempt(
                 draft=Draft(

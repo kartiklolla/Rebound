@@ -879,3 +879,83 @@ class TestAnthropicDrafter:
         english = _brief_prompt(make_brief(language=Language.EN))
         assert "134" in hindi
         assert "134" not in english
+
+
+class TestTheDrafterCannotMoveTheGroundTruth:
+    """A frozen brief is not an isolated one.
+
+    `MessageBrief` blocks assignment but not `object.__setattr__`, and the
+    drafter was handed the live object. So a drafter could rewrite the fact it
+    was about to be checked against, quote the new value, and have the verifier
+    confirm the message matched the brief. It did: a phishing host came back
+    from `compose` cleared, with `fell_back=False`. The check was not evaded;
+    the ground truth was moved.
+
+    Structurally the same defect the harness had, where the report was read off
+    the object handed to the untrusted component.
+    """
+
+    PHISH = (
+        "Vahan: your payment of Rs.1,299 failed. Please keep sufficient "
+        "balance, or pay at https://vahan-secure.ru/pay"
+    )
+
+    class _Rewriter:
+        name = "model:rewriter"
+
+        def __init__(self, field: str, value):
+            self.field = field
+            self.value = value
+            self.seen: list = []
+
+        def draft(self, brief, *, previous=None, feedback=None):
+            object.__setattr__(brief, self.field, self.value)
+            self.seen.append(brief)
+            return Draft(
+                body=TestTheDrafterCannotMoveTheGroundTruth.PHISH,
+                language=brief.language,
+                produced_by=self.name,
+            )
+
+    def test_rewriting_the_link_does_not_clear_a_phishing_host(self):
+        drafter = self._Rewriter("link", "https://vahan-secure.ru/pay")
+        brief = make_brief()
+        result = CommsDesk(drafter=drafter).compose(brief)
+
+        assert result.sent is not None
+        assert result.sent.body != self.PHISH
+        assert result.fell_back
+        assert any(f.check_id == "links_are_ours" for f in result.findings)
+
+    def test_the_caller_s_brief_is_never_mutated(self):
+        drafter = self._Rewriter("link", "https://vahan-secure.ru/pay")
+        brief = make_brief()
+        CommsDesk(drafter=drafter).compose(brief)
+        assert brief.link is None
+        assert drafter.seen and drafter.seen[0] is not brief
+
+    def test_rewriting_the_amount_does_not_clear_a_wrong_figure(self):
+        # The other direction: move the amount to match a draft that quotes
+        # the wrong one.
+        drafter = self._Rewriter("amount_paise", 1)
+        brief = make_brief()
+        result = CommsDesk(drafter=drafter).compose(brief)
+        assert brief.amount_paise == 129900
+        assert result.fell_back
+
+    def test_a_copy_still_carries_everything_a_drafter_legitimately_needs(self):
+        # Cutting the graph must not cut the facts. A drafter that reads the
+        # copy has to be able to write a clearing message from it.
+        seen: list = []
+
+        class _Reader:
+            name = "model:reader"
+
+            def draft(self, brief, *, previous=None, feedback=None):
+                seen.append(brief)
+                return render_template(brief)
+
+        brief = make_brief()
+        result = CommsDesk(drafter=_Reader()).compose(brief)
+        assert result.cleared and not result.fell_back
+        assert seen[0] == brief

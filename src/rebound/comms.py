@@ -7,7 +7,7 @@ exposure is already fixed by code that was measured or by a regulation that was
 cited: the amount comes from the mandate, the channel from the chosen action,
 the moment from the gate's deferral arithmetic, the instruction from the
 failure's disposition. What is left over is a language problem — say this, to
-this person, in Hinglish, inside 134 characters — and that is the one part of
+this person, in Hinglish, inside one GSM-7 segment — and that is the one part of
 the system where a template library is genuinely worse than a language model.
 
 So a drafter is handed a :class:`MessageBrief` and returns prose. It does not
