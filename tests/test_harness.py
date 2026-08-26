@@ -328,6 +328,35 @@ def test_the_settlement_draw_ignores_everything_the_policy_did(setup):
     settled = {n: settle(n) for n in range(8)}
     assert len(set(settled.values())) == 1, settled
 
+    # And on the draw itself, not only the outcome it produced. A hazard near
+    # 0 or 1 pins the boolean to one side whatever uniform it meets, so the
+    # assertion above passed even with the addressing reverted — the same way
+    # the terminal collect-link "guarantee" passed for one alignment of the
+    # stream. This is the property the fix actually claims.
+    from rebound.sim.world import _DRAW_SETTLEMENT
+
+    draws = set()
+    for history_length in range(8):
+        episode = world.open_episode(
+            episode_id="EP_PROBE",
+            mandate=spec.mandate,
+            customer=spec.customer,
+            failure_code=spec.failure_code,
+            failed_at=spec.failed_at,
+            cycles_elapsed=spec.cycles_elapsed,
+            entropy=EpisodeEntropy(20260825),
+        )
+        for _ in range(history_length):
+            episode.history.append(
+                ActionOutcome(
+                    action=Action.NUDGE_EMAIL, at=spec.failed_at, succeeded=False,
+                    recovered_paise=0, cost_paise=200, revoked=False,
+                    destroyed_paise=0, detail="probe",
+                )
+            )
+        draws.add(world._draw(episode, _DRAW_SETTLEMENT))
+    assert len(draws) == 1, f"the settlement draw moved with history: {draws}"
+
 
 def test_an_episode_id_does_not_reveal_its_stream_index(setup):
     """The id was `EV_{index:08d}` and the per-episode seed was `seed + index`.
