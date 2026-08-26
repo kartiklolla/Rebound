@@ -38,6 +38,7 @@ from rebound.economics import (
     CHANNEL_INTRUSIVENESS,
     Ledger,
     attempt_cost_paise,
+    presenting_rail,
     revocation_cost_paise,
 )
 from rebound.sim.params import (
@@ -148,6 +149,64 @@ class Mandate:
             )
 
 
+#: Each kind of draw the world makes during a rollout, as a stream label.
+#: These are what make common random numbers actually common — see
+#: :class:`EpisodeEntropy`.
+_DRAW_SETTLEMENT = 1
+_DRAW_OUTAGE = 2
+_DRAW_REVOCATION = 3
+_DRAW_OUTCOME = 4
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodeEntropy:
+    """Every random draw an episode needs, addressed rather than ordered.
+
+    The simulator used to take every draw from one sequential stream, so which
+    uniform landed on a given retry depended on *how many* draws came before
+    it — that is, on everything else the policy had chosen to do. Two
+    consequences, both bad, both measured.
+
+    **Common random numbers were not common.** The passive-churn draw settling
+    an episode came after whatever the policy had consumed, so a policy sending
+    one extra email met a different settlement outcome on 15.75% of episodes
+    than a policy sending none, while the underlying churn hazard was provably
+    identical for both. Across the baselines that was 177,000-319,000 rupees
+    per thousand episodes of pure alignment noise, against a policy gap of
+    316,000 — and on one batch it reversed the ordering of two baselines.
+
+    **And it was exploitable.** A policy could burn cheap actions to slide its
+    retry onto a favourable uniform. A demonstration policy doing exactly that
+    lifted recovery from 0.505 to 0.754 and net value 7.4x out of the same
+    single retry, without tripping any tamper check — because it never
+    tampered. It read.
+
+    So a draw is now addressed by *what it is for* and *its ordinal within its
+    own kind*. The third debit presentation on an episode always meets the same
+    uniform, whatever else happened around it; sending emails cannot move it,
+    because emails are not debit presentations. Streams are derived on demand
+    rather than stored, so nothing depends on the order they are asked for.
+
+    What this does **not** claim: a policy that knows the run seed could still
+    derive these streams. Reproducibility from a published seed and secrecy
+    from an adversary holding that seed are not simultaneously achievable, and
+    this is a measurement harness, not a sandbox. What it removes is the free
+    lunch — the stream index is no longer handed to the policy inside its own
+    episode id, and no quantity of burned actions changes an outcome.
+    """
+
+    entropy: int
+
+    def stream(self, purpose: int, ordinal: int = 0) -> np.random.Generator:
+        """A generator fixed by ``(episode, purpose, ordinal)`` and nothing else."""
+        return np.random.default_rng(
+            np.random.SeedSequence(self.entropy, spawn_key=(purpose, ordinal))
+        )
+
+    def uniform(self, purpose: int, ordinal: int = 0) -> float:
+        return float(self.stream(purpose, ordinal).random())
+
+
 @dataclass(slots=True)
 class Episode:
     """One failed debit, and the state of the attempt to recover it.
@@ -163,6 +222,16 @@ class Episode:
     failure_code: str
     failed_at: dt.datetime
     cycles_elapsed: int
+
+    entropy: EpisodeEntropy | None = None
+    """This episode's addressed random draws.
+
+    ``None`` outside a rollout — the dataset generator and the unit tests build
+    episodes without one and fall back to the world's shared stream, which is
+    correct there because nothing is being compared against anything. Inside
+    :func:`~rebound.eval.harness.evaluate_policy` it is always populated, and
+    that is the only place a number gets reported.
+    """
 
     contacts_made: int = 0
     customer_unblocked: bool = False
@@ -551,7 +620,7 @@ class World:
         mandate: Mandate,
         customer: Customer,
         at: dt.datetime,
-        notification_sent: bool = True,
+        notification_sent: bool = True,  # noqa: ARG002 - see below
         rng: np.random.Generator | None = None,
     ) -> str | None:
         """Failure code for a debit presented at ``at``, or ``None`` if it succeeded.
@@ -702,6 +771,31 @@ class World:
         relative_intent = episode.customer.churn_intent / mean_churn_intent
         return float(np.clip(p.passive_revocation_rate * relative_intent, 0.0, 0.9))
 
+    def _draw(self, episode: Episode, purpose: int, ordinal: int = 0) -> float:
+        """One uniform, addressed by purpose rather than by call order.
+
+        Falls back to the world's shared stream when an episode carries no
+        entropy, which is the case for the dataset generator and for unit
+        tests. That is safe precisely where nothing is being compared: the
+        defect this addresses is a *between-policy* one, and the harness always
+        supplies entropy.
+        """
+        if episode.entropy is None:
+            return float(self.rng.random())
+        return episode.entropy.uniform(purpose, ordinal)
+
+    @staticmethod
+    def _ordinal(episode: Episode, action: Action) -> int:
+        """How many times this exact action has already been taken here.
+
+        The ordinal is per action, not per step, and that is the whole point.
+        Keying on the step index would leave the exploit intact: a policy could
+        still slide its retry along the stream by taking cheap actions first.
+        Keying on "the third debit presentation" means only debit presentations
+        move the debit stream.
+        """
+        return sum(1 for outcome in episode.history if outcome.action is action)
+
     def close_episode(self, episode: Episode) -> ActionOutcome | None:
         """Settle an episode once the policy is finished with it.
 
@@ -717,15 +811,26 @@ class World:
         """
         if episode.resolved or episode.revoked:
             return None
-        if self.rng.random() >= self.passive_revocation_hazard(episode):
+        if self._draw(episode, _DRAW_SETTLEMENT) >= self.passive_revocation_hazard(
+            episode
+        ):
             return None
 
         destroyed = revocation_cost_paise(episode.mandate.cycle_amount_paise)
         episode.revoked = True
         episode.ledger = episode.ledger.plus_destruction(destroyed)
+        # Stamped after the last action, not at failed_at. Passive churn is
+        # settled once the policy is finished, so dating it to the moment the
+        # debit failed put it before every action in `history` and made
+        # `ActionOutcome.at` non-monotonic in the audit record — a trail that
+        # reads as though the customer revoked before being contacted.
+        settled_at = max(
+            (outcome.at for outcome in episode.history),
+            default=episode.failed_at,
+        )
         outcome = ActionOutcome(
             action=Action.STOP,
-            at=episode.failed_at,
+            at=settled_at,
             succeeded=False,
             recovered_paise=0,
             cost_paise=0,
@@ -750,7 +855,11 @@ class World:
                 f"the sequencer should not be acting on it"
             )
 
-        cost = attempt_cost_paise(action, episode.mandate.rail)
+        # Priced on the rail this action presents on, which for an alt-rail retry
+        # is not the episode's own rail. See economics.attempt_cost_paise.
+        cost = attempt_cost_paise(
+            action, presenting_rail(action, episode.mandate.rail)
+        )
 
         if action is Action.STOP:
             episode.stopped = True
@@ -761,7 +870,10 @@ class World:
 
         # Contact-driven actions carry revocation risk before anything else.
         if action in NUDGE_ACTIONS or action in _REPAIR_ACTIONS:
-            if self.rng.random() < self.revocation_hazard(episode, action):
+            ordinal = self._ordinal(episode, action)
+            if self._draw(episode, _DRAW_REVOCATION, ordinal) < self.revocation_hazard(
+                episode, action
+            ):
                 destroyed = revocation_cost_paise(
                     episode.mandate.cycle_amount_paise
                 )
@@ -820,6 +932,20 @@ class World:
                 "presented outside the permitted UPI execution window",
             )
 
+        # A mandate can expire *during* the recovery window. `sample_failure`
+        # checks this when generating the original debit; nothing re-checked it
+        # afterwards, so a 28-day recovery could present against a mandate that
+        # had lapsed on day three. 145 of 6,898 episodes (2.1%) expire mid-
+        # window, and the fixed ladder collected Rs 10,060 across 12 of them —
+        # money the compliance gate says is uncollectable, and which the
+        # gate-bound sequencer was correctly denied. That made the comparison
+        # between policies one run under different rules.
+        if at.date() > mandate.valid_until:
+            return self._record(
+                episode, action, at, False, 0, cost, False, 0,
+                "mandate expired before this presentation",
+            )
+
         mode = get_mode(episode.failure_code)
         if not mode.mandate_alive and not episode.mandate_repaired:
             return self._record(
@@ -866,7 +992,7 @@ class World:
             # lever merchants actually have is worthless.
             funds_p += (1.0 - funds_p) * self.params.nudge_top_up_lift
 
-        if self.rng.random() >= funds_p:
+        if self._draw(episode, _DRAW_OUTCOME, self._ordinal(episode, action)) >= funds_p:
             return self._record(
                 episode, action, at, False, 0, cost, False, 0,
                 "account still not funded",
@@ -881,7 +1007,9 @@ class World:
     def _apply_nudge(
         self, episode: Episode, action: Action, at: dt.datetime, cost: int
     ) -> ActionOutcome:
-        acted = self.rng.random() < self.nudge_efficacy(episode, action)
+        acted = self._draw(
+            episode, _DRAW_OUTCOME, self._ordinal(episode, action)
+        ) < self.nudge_efficacy(episode, action)
         episode.contacts_made += 1
         if acted:
             episode.customer_unblocked = True
@@ -898,11 +1026,33 @@ class World:
     ) -> ActionOutcome:
         """A one-time payment link, which sidesteps the mandate entirely.
 
-        The only action that recovers money from a structurally dead mandate,
-        and therefore the only thing standing between a MANDATE_REPAIR failure
-        and a total write-off.
+        The only action that recovers money from a structurally *repairable*
+        mandate, and therefore the only thing standing between a
+        MANDATE_REPAIR failure and a total write-off.
+
+        It does not sidestep a terminal one. ``_DISPOSITION_ACTIONS[TERMINAL]``
+        is empty — the taxonomy says no action is legal on a closed account or
+        a mandate the payer has cancelled — and this is the one path that
+        recovers money without consulting ``mandate_alive``, so it was the one
+        place the world disagreed with the taxonomy it is supposed to obey.
+
+        Found by re-seeding. ``test_no_policy_recovers_money_from_a_terminal_
+        failure`` calls itself "a structural guarantee, not a statistical one"
+        and was statistical: it passed because the old draw ordering never
+        happened to pay a link on those 150 terminal episodes. Addressing the
+        draws re-rolled them and ``aggressive_contact`` collected Rs 394 from a
+        dead account. A guarantee that holds only for one alignment of the
+        random stream is not a guarantee.
         """
-        paid = self.rng.random() < self.nudge_efficacy(episode, action) * (
+        if episode.disposition is Disposition.TERMINAL:
+            episode.contacts_made += 1
+            return self._record(
+                episode, action, at, False, 0, cost, False, 0,
+                "collect link sent to a closed account; nothing to collect",
+            )
+        paid = self._draw(
+            episode, _DRAW_OUTCOME, self._ordinal(episode, action)
+        ) < self.nudge_efficacy(episode, action) * (
             0.55 + 0.45 * self.funds_probability(episode.customer, at.date())
         )
         episode.contacts_made += 1
@@ -921,7 +1071,9 @@ class World:
     ) -> ActionOutcome:
         # Re-mandating is slower and more effortful than tapping a link, so it
         # converts at a fraction of ordinary nudge efficacy.
-        repaired = self.rng.random() < self.nudge_efficacy(episode, action) * 0.7
+        repaired = self._draw(
+            episode, _DRAW_OUTCOME, self._ordinal(episode, action)
+        ) < self.nudge_efficacy(episode, action) * 0.7
         episode.contacts_made += 1
         if repaired:
             episode.mandate_repaired = True
@@ -939,7 +1091,12 @@ class World:
             self.params.outage_mean_hours
             * self._bank_outage_factor[episode.customer.bank]
         )
-        drawn = float(self.rng.exponential(max(0.25, hours)))
+        stream = (
+            self.rng
+            if episode.entropy is None
+            else episode.entropy.stream(_DRAW_OUTAGE)
+        )
+        drawn = float(stream.exponential(max(0.25, hours)))
         return episode.failed_at + dt.timedelta(hours=drawn)
 
     # -- bookkeeping ------------------------------------------------------
@@ -987,6 +1144,7 @@ class World:
         failure_code: str,
         failed_at: dt.datetime,
         cycles_elapsed: int,
+        entropy: EpisodeEntropy | None = None,
     ) -> Episode:
         return Episode(
             episode_id=episode_id,
@@ -995,6 +1153,7 @@ class World:
             failure_code=failure_code,
             failed_at=failed_at,
             cycles_elapsed=cycles_elapsed,
+            entropy=entropy,
         )
 
 

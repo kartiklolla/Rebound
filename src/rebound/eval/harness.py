@@ -28,15 +28,28 @@ evidence and not checking it against the claim is worse than not building it.
 
 Common random numbers
 ---------------------
-Every policy faces the same batch, and each episode gets its own seeded stream
-derived from its index, so policy A and policy B meet the same customer under
-the same luck. With revocation at a few percent, unpaired draws mean much of any
-measured difference is just which policy drew better dice.
+Every policy faces the same batch, and each episode's draws are fixed by the run
+seed and the episode alone, so policy A and policy B meet the same customer
+under the same luck. With revocation at a few percent, unpaired draws mean much
+of any measured difference is just which policy drew better dice.
+
+That was broken for most of this project's life and neither defence above could
+see it, because neither involved tampering. Every draw came from one sequential
+stream, so *which* uniform met a given action depended on how many draws had
+happened first — on everything else the policy had chosen to do. It made the
+pairing fictitious (177,000-319,000 rupees per thousand episodes of alignment
+noise against a policy gap of 316,000, and one batch where two baselines
+swapped places) and it was exploitable: the per-episode seed was ``seed +
+index`` and the episode id was ``EV_{index:08d}``, so a policy could read its
+own stream index and burn cheap actions to slide its retry onto a favourable
+uniform. See :class:`~rebound.sim.world.EpisodeEntropy` for the fix and for
+what it does not claim.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import time
 from dataclasses import asdict, dataclass, field
 
@@ -51,6 +64,7 @@ from rebound.sim.world import (
     ActionOutcome,
     Customer,
     Episode,
+    EpisodeEntropy,
     Mandate,
     World,
 )
@@ -59,6 +73,30 @@ from rebound.taxonomy import Action
 DEFAULT_RECOVERY_WINDOW_DAYS = 28
 DEFAULT_MAX_STEPS = 8
 DEFAULT_TIMEOUT_SECONDS = 120.0
+
+
+def _episode_id(seed: int, index: int) -> str:
+    """An episode id that does not hand the policy its own stream index.
+
+    The old id was ``EV_{index:08d}`` and the per-episode seed was
+    ``seed + index``, so a policy could read the index off its own view,
+    reconstruct every uniform the world was about to draw, and shape its
+    actions around them. That is not tampering — nothing is mutated and every
+    integrity check still passes — so nothing caught it. A demonstration
+    policy lifted recovery from 0.505 to 0.754 and net value 7.4x out of a
+    single retry.
+
+    Hashing the pair removes the free lunch without costing reproducibility:
+    the same seed still yields the same ids, and the same episode still faces
+    the same draws under every policy. It does not make the streams
+    *underivable* by someone who has the seed — see :class:`EpisodeEntropy`
+    for why that is not achievable alongside reproducibility, and for the
+    change that makes the exploit useless rather than merely harder.
+    """
+    digest = hashlib.blake2b(
+        f"{seed}:{index}".encode(), digest_size=6
+    ).hexdigest()
+    return f"EV_{digest}"
 
 
 class IntegrityError(RuntimeError):
@@ -308,6 +346,16 @@ def evaluate_policy(
     audit: list[AuditEntry] = []
     exceptions: list[dict] = []
 
+    # One child seed per episode, derived by hashing rather than by addition.
+    # `seed + index` was arithmetic a policy could invert from its own episode
+    # id, which was `EV_{index:08d}` — so the index of its own random stream was
+    # handed to it, and a policy that reconstructed the stream lifted recovery
+    # from 0.505 to 0.754 without tampering with anything.
+    entropies = [
+        int(child.generate_state(1, dtype=np.uint64)[0])
+        for child in np.random.SeedSequence(seed).spawn(len(batch))
+    ]
+
     for index, spec in enumerate(batch):
         if time.monotonic() - started > timeout_seconds:
             raise PolicyFailed(
@@ -316,17 +364,21 @@ def evaluate_policy(
                 f"would otherwise hang the whole comparison."
             )
 
-        # Common random numbers: this episode's stream depends only on its
-        # index, so every policy meets it under identical conditions.
-        world.rng = np.random.default_rng(seed + index)
+        # Common random numbers: this episode's draws depend only on the run
+        # seed and the episode's position, so every policy meets it under
+        # identical conditions. The entropy rides on the episode rather than in
+        # world.rng, because one sequential stream made a retry's outcome
+        # depend on how many unrelated draws preceded it. See EpisodeEntropy.
+        world.rng = np.random.default_rng(entropies[index])
 
         episode = world.open_episode(
-            episode_id=f"EV_{index:08d}",
+            episode_id=_episode_id(seed, index),
             mandate=spec.mandate,
             customer=spec.customer,
             failure_code=spec.failure_code,
             failed_at=spec.failed_at,
             cycles_elapsed=spec.cycles_elapsed,
+            entropy=EpisodeEntropy(entropies[index]),
         )
         observed = _Observed(failure_code=spec.failure_code)
         deadline = spec.failed_at + dt.timedelta(days=recovery_window_days)
@@ -476,9 +528,21 @@ def _exception_row(episode: Episode, observed: _Observed) -> dict:
     a merchant can act on and one they can only feel bad about.
     """
     if observed.revoked:
+        # Attributed to the outcome that actually carried the revocation, not
+        # to whether the policy ever made contact. Reading it off
+        # ``observed.contacts`` blamed the merchant for churn the merchant did
+        # not cause: passive churn is settled by ``close_episode`` under a
+        # STOP outcome, so any episode that had ever been contacted was
+        # reported as driven away. Measured, 79 of 98 such lines were wrong for
+        # `disposition_rules` — 81% — and the whole point of this list is that
+        # a merchant can act on it.
+        revoked_at_contact = any(
+            outcome.revoked and outcome.action is not Action.STOP
+            for outcome in observed.outcomes
+        )
         reason = (
             "customer revoked the mandate after being contacted"
-            if observed.contacts
+            if revoked_at_contact
             else "customer revoked on their own once the payment went unrecovered"
         )
     elif episode.stopped:
@@ -543,6 +607,17 @@ def evaluate_all(
 
 
 def _null_report(name: str, episodes: int) -> PolicyReport:
+    """A placeholder for a policy that crashed.
+
+    ``net_paise`` is deliberately the worst possible value rather than zero.
+    Every real policy here scores negative, so a zero sorted a crash to the
+    *top* of any table ordered by net value — which is how this project once
+    reported +100.0% for a policy that had died two thousand episodes in.
+    ``evaluate_sequencer.py`` guards by refusing to tabulate an incomplete run,
+    but ``policy_comparison`` and ``lift_over_baseline`` take a report rather
+    than a result and cannot see the error, so the placeholder itself must not
+    be flattering.
+    """
     return PolicyReport(
         policy=name,
         episodes=episodes,
@@ -551,7 +626,7 @@ def _null_report(name: str, episodes: int) -> PolicyReport:
         recovered_paise=0,
         spent_paise=0,
         destroyed_paise=0,
-        net_paise=0,
+        net_paise=-(2**62),
         attempts_per_episode=0.0,
         contacts_per_episode=0.0,
     )

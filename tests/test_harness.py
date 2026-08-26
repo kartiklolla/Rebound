@@ -211,3 +211,176 @@ def test_upi_retries_are_scheduled_inside_the_execution_window(setup):
         assert outside == 0, (
             f"{outside} retries were presented into a closed UPI window"
         )
+
+
+# ==========================================================================
+# The random stream
+# ==========================================================================
+#
+# Two defects lived here and neither was visible to any tamper check, because
+# neither involved tampering. Every draw came from one sequential stream, so
+# *which* uniform met a given action depended on how many draws had happened
+# first — that is, on everything else the policy had chosen to do.
+#
+# It made common random numbers not common: a policy sending one extra email
+# met a different settlement outcome on 15.75% of episodes than one sending
+# none, worth 177k-319k rupees per thousand episodes of alignment noise against
+# a policy gap of 316k, and on one batch it reversed two baselines outright.
+#
+# And it was exploitable: the per-episode seed was `seed + index` and the
+# episode id was `EV_{index:08d}`, so a policy could read its own stream index,
+# reconstruct the uniforms, and burn cheap actions to slide its retry onto a
+# favourable one. A demonstration lifted recovery 0.505 -> 0.754 and net value
+# 7.4x out of the same single retry.
+
+
+class _Burner(Policy):
+    """k emails, then one retry. k is the knob the exploit turned."""
+
+    def __init__(self, k: int):
+        self.k = k
+        self.name = f"burn_{k}"
+
+    def reset(self) -> None:
+        pass
+
+    def decide(self, view, now, deadline):
+        if view.steps_taken < self.k:
+            return Decision(
+                Action.NUDGE_EMAIL, now + dt.timedelta(minutes=5), "burn"
+            )
+        if view.steps_taken == self.k:
+            return Decision(
+                Action.RETRY_SAME_RAIL, now + dt.timedelta(hours=2), "retry"
+            )
+        return None
+
+
+def test_a_draw_depends_on_its_ordinal_and_nothing_else(setup):
+    """The exact property the fix rests on.
+
+    The uniform met by the k-th debit presentation is a function of the
+    episode and k alone. Anything else the policy did — however much of it —
+    cannot move it, because the stream is addressed rather than consumed.
+    """
+    from rebound.sim.world import _DRAW_OUTCOME, _DRAW_SETTLEMENT, EpisodeEntropy
+
+    entropy = EpisodeEntropy(20260825)
+    first = entropy.uniform(_DRAW_OUTCOME, 0)
+
+    # Asking for every other draw, in any order, any number of times.
+    for ordinal in range(12):
+        entropy.uniform(_DRAW_OUTCOME, ordinal)
+        entropy.uniform(_DRAW_SETTLEMENT, ordinal)
+    for ordinal in reversed(range(12)):
+        entropy.uniform(_DRAW_OUTCOME, ordinal)
+
+    assert entropy.uniform(_DRAW_OUTCOME, 0) == first
+    # And distinct addresses are genuinely distinct draws, or the whole scheme
+    # would be a constant.
+    assert len({entropy.uniform(_DRAW_OUTCOME, k) for k in range(12)}) == 12
+    assert entropy.uniform(_DRAW_SETTLEMENT, 0) != first
+
+
+def test_the_settlement_draw_ignores_everything_the_policy_did(setup):
+    """Common random numbers, tested where they were actually broken.
+
+    Tested on the draw itself rather than on a revocation rate. A rate cannot
+    isolate this: taking more retries resolves more episodes, which removes
+    them from settlement altogether, so the rate moves for an honest reason and
+    a stream artefact would hide inside it.
+
+    Two episodes, same entropy, same customer, same everything — except one has
+    a long history behind it. Under the old shared stream the settled outcome
+    depended on how many draws that history had consumed.
+    """
+    from rebound.sim.world import ActionOutcome, EpisodeEntropy
+
+    world, batch = setup
+    spec = batch[0]
+
+    def settle(history_length: int):
+        episode = world.open_episode(
+            episode_id="EP_PROBE",
+            mandate=spec.mandate,
+            customer=spec.customer,
+            failure_code=spec.failure_code,
+            failed_at=spec.failed_at,
+            cycles_elapsed=spec.cycles_elapsed,
+            entropy=EpisodeEntropy(20260825),
+        )
+        for _ in range(history_length):
+            episode.history.append(
+                ActionOutcome(
+                    action=Action.NUDGE_EMAIL,
+                    at=spec.failed_at,
+                    succeeded=False,
+                    recovered_paise=0,
+                    cost_paise=200,
+                    revoked=False,
+                    destroyed_paise=0,
+                    detail="probe",
+                )
+            )
+        outcome = world.close_episode(episode)
+        return outcome is not None
+
+    settled = {n: settle(n) for n in range(8)}
+    assert len(set(settled.values())) == 1, settled
+
+
+def test_an_episode_id_does_not_reveal_its_stream_index(setup):
+    """The id was `EV_{index:08d}` and the per-episode seed was `seed + index`.
+
+    A policy reads the id off its own view, so the index of the random stream
+    it was about to face was handed to it directly, and the arithmetic to turn
+    one into the other was a documented constant.
+    """
+    from rebound.eval.harness import _episode_id
+
+    ids = [_episode_id(4242, i) for i in range(200)]
+
+    for i, episode_id in enumerate(ids):
+        assert episode_id != f"EV_{i:08d}"
+        suffix = episode_id.removeprefix("EV_")
+        # Not the index in any base, and not adjacent to it.
+        assert suffix != str(i)
+        if suffix.isdigit():
+            assert abs(int(suffix) - i) > 1000
+
+    # A hash is not monotonic in its input; a counter is.
+    assert ids != sorted(ids)
+    assert len(set(ids)) == len(ids), "ids collided"
+
+    # Reproducible from the seed, or nothing in this project replays.
+    assert ids == [_episode_id(4242, i) for i in range(200)]
+    # And the seed actually participates.
+    assert ids[0] != _episode_id(4243, 0)
+
+
+def test_the_same_seed_reproduces_the_same_report(setup):
+    world, batch = setup
+    episodes = batch[:300]
+    first = evaluate_policy(world, DispositionAwareRules(), episodes, seed=11).report
+    second = evaluate_policy(world, DispositionAwareRules(), episodes, seed=11).report
+    assert first == second
+
+
+def test_a_collect_link_recovers_nothing_from_a_closed_account(setup):
+    """Structural, not statistical — which it was not before.
+
+    `_apply_collect_link` was the one path that recovered money without
+    consulting `mandate_alive`, so it disagreed with the taxonomy, which makes
+    every action on a TERMINAL failure illegal. The guarantee held only because
+    the old draw ordering never happened to pay a link on those episodes; the
+    moment the draws were re-addressed, `aggressive_contact` collected Rs 394
+    from a dead account.
+    """
+    world, batch = setup
+    terminal = [spec for spec in batch if is_terminal(spec.failure_code)][:150]
+    assert terminal, "no terminal failures in the batch"
+    for seed in (3, 17, 4242, 20260825):
+        result = evaluate_policy(world, AggressiveContact(), terminal, seed=seed)
+        assert result.report.recovered_paise == 0, (
+            f"collected from a terminal failure on seed {seed}"
+        )
