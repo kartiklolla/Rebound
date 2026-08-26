@@ -64,8 +64,8 @@ that as a limitation to state rather than hide. The claims are split accordingly
 
 ### Claim A — recovery-probability models
 
-162,743 decision points, 43,657 episodes, 5,974 customers. Both splits verified clean
-before scoring.
+163,129 decision points, 43,789 episodes, 5,981 customers. Both splits verified clean
+before scoring. Reproduce with `uv run python scripts/train_model.py`.
 
 Two heads, because choosing *when* to present a retry and choosing *which action* to
 take are different questions with different labels. Immediate retry success runs 0.65
@@ -76,15 +76,22 @@ episode label washes out the timing of any single decision.
 | | Time split | Customer split |
 |---|---:|---:|
 | **Action head** (`episode_recovered`) | | |
-| PR-AUC | 0.6213 | 0.6578 |
-| ROC-AUC | 0.9186 | 0.8954 |
-| ECE | 0.0108 | 0.0035 |
-| Precision @ 10% capacity | 0.6479 | 0.7199 |
-| failure-code prior (baseline) | 0.5483 | 0.5596 |
+| PR-AUC | 0.6045 | 0.6693 |
+| ROC-AUC | 0.9182 | 0.9045 |
+| ECE | 0.0257 | 0.0068 |
+| Precision @ 10% capacity | 0.6298 | 0.7248 |
+| failure-code prior (baseline) | 0.5406 | 0.5595 |
 | **Timing head** (`succeeded`, collecting actions) | | |
-| PR-AUC | 0.5901 | 0.6098 |
-| ROC-AUC | 0.9424 | 0.9182 |
-| ECE | 0.0074 | 0.0090 |
+| PR-AUC | 0.5778 | 0.6243 |
+| ROC-AUC | 0.9397 | 0.9215 |
+| ECE | 0.0216 | 0.0074 |
+
+**Calibration on the time split is the weak number here**, and it got worse
+rather than better: held-out ECE 0.0257 against 0.0068 on the customer split.
+The selection slice picked sigmoid on an inner ECE of 0.0101 and the held-out
+figure is 2.5× that, so the calibrator generalises across customers and not
+across time. The policy multiplies these probabilities by rupee amounts, so
+this is the figure to be least comfortable with.
 
 **The caveat belongs next to the number, not below it.** The action head's ROC-AUC of 0.919
 is mostly the model separating hopeless failure dispositions from live ones — which the
@@ -101,8 +108,14 @@ asserting it:
 
 | Same rows (collecting actions), time split | Timing head | Action head |
 |---|---:|---:|
-| ROC on `succeeded` | **0.9424** | 0.9132 |
-| ROC on `episode_recovered` | 0.8708 | **0.9201** |
+| PR on `succeeded` | **0.5778** | 0.4511 |
+| ROC on `succeeded` | **0.9397** | 0.9042 |
+| PR on `episode_recovered` | 0.6437 | **0.6526** |
+| ROC on `episode_recovered` | 0.9001 | **0.9164** |
+
+The PR margin on the downstream label is under 0.01 — thin enough that a
+reduced-scale fixture inverts it, which is why the unit test asserts ROC and
+this table is where the PR comparison is established.
 
 Each head wins its own question and loses the other. That is what justifies keeping both.
 Had either won on both, the other would be dead weight and should be deleted.
@@ -162,44 +175,69 @@ every one of them had been making the model quietly worse while the tests report
 
 ### Claim B — policy vs baselines
 
-**Measured on five world seeds that policy selection never touched.** Full
-scale, ~6,900 failed debits per seed, paired random draws.
+**Measured on five world seeds that policy selection never touched**, and
+re-measured from scratch after two independent sweeps found defects in the
+harness itself. Full scale, ~6,900 failed debits per seed, paired random draws.
+Reproduce with `uv run python scripts/holdout.py`.
 
 | Policy | Recovery | Revocation | Contacts/ep | Net ₹/1000 | Gap vs ladder |
 |---|---:|---:|---:|---:|---:|
-| **`rebound_sequencer`** | **0.540** | 0.052 | 0.95 | −97,278 | **+56,787** |
-| `fixed_ladder` | 0.458 | 0.048 | 0.00 | −154,065 | — |
-| `immediate_retry` | 0.407 | 0.052 | 0.00 | −271,976 | −117,911 |
-| `disposition_rules` | 0.428 | 0.061 | 0.90 | −369,653 | −215,588 |
-| `no_recovery` | 0.000 | 0.088 | 0.00 | −1,274,866 | −1,120,801 |
-| `aggressive_contact` | 0.306 | 0.133 | 3.62 | −1,516,667 | −1,362,603 |
+| **`rebound_sequencer`** | **0.511** | 0.049 | 0.98 | −54,696 | **+40,916** |
+| `fixed_ladder` | 0.460 | 0.047 | 0.00 | −95,613 | — |
+| `immediate_retry` | 0.408 | 0.052 | 0.00 | −221,097 | −125,485 |
+| `disposition_rules` | 0.431 | 0.056 | 0.90 | −233,064 | −137,452 |
+| `aggressive_contact` | 0.274 | 0.101 | 3.67 | −1,114,588 | −1,018,976 |
+| `no_recovery` | 0.000 | 0.087 | 0.00 | −1,221,633 | −1,126,020 |
 
-Gap over the ladder, per seed: **+11,992 / +38,466 / +59,435 / +73,236 /
-+100,804**. Mean **+56,787**, sd 33,754, **positive on 5 of 5**.
+Gap over the ladder, per seed: **−9,596 / +19,282 / +42,038 / +74,125 /
++78,733**. Mean **+40,916**, sd 37,262, **positive on 4 of 5**.
+
+**This is not statistically significant.** t = 2.455 on 4 df, p ≈ 0.070. The
+sequencer loses to the fixed ladder on one of the five held-out seeds. The
+direction is consistent and the effect is not resolved by five seeds — that is
+the honest description, and it is weaker than what this README said a day ago.
 
 **Every net figure is negative, the ladder's included.** "Ahead" means less bad,
 not profitable. These are simulator rupees — read the ordering, not the
 magnitudes.
 
-### Why these seeds and not the earlier ones
+### Why these seeds, and why they were measured twice
 
 Roughly ten policy variants were compared during development on a fixed set of
 four seeds. Ten looks at a metric whose seed standard deviation is ~96,000 on
 that set is ten chances to get lucky, and nothing in the project protected
 against that — every other selection decision here is split-protected, and
-policy selection was not.
+policy selection was not. So Claim B was re-measured on five seeds selection had
+never seen.
 
-So Claim B was re-measured on five seeds selection had never seen. It cost the
-headline most of its size:
+Then the harness those seeds ran through turned out to have two defects, both
+found by review rather than by any test here:
+
+- **Common random numbers were not common.** Every draw came from one sequential
+  stream, so the passive-churn draw that settles an episode depended on how many
+  draws the policy had already made. Two policies met provably identical churn
+  hazards and different outcomes on 15.75% of episodes — worth 177,000–319,000
+  ₹/1000 of pure alignment noise against a policy gap of 316,000, and on one
+  batch it reversed two baselines outright.
+- **A policy could read its own random stream.** The per-episode seed was
+  `seed + index` and the episode id was `EV_{index:08d}`, so the index was handed
+  to the policy in its own view. A demonstration policy that reconstructed the
+  uniforms and burned 2-paise emails to align its single retry lifted recovery
+  from 0.505 to 0.754 and net value 7.4×, without tripping a single integrity
+  check — because it never tampered with anything.
+
+So the numbers above are the third measurement, not the first:
 
 | | mean gap | min | seeds won |
 |---|---:|---:|---:|
-| Selection seeds | +164,807 | +76,248 | 4/4 |
-| **Held-out seeds** | **+56,787** | **+11,992** | **5/5** |
+| Selection seeds (4) | +164,807 | +76,248 | 4/4 |
+| Held-out seeds, old harness | +56,787 | +11,992 | 5/5 |
+| **Held-out seeds, fixed harness** | **+40,916** | **−9,596** | **4/5** |
 
-**The selection-set figure was inflated about 2.9×.** The direction survived and
-the magnitude did not, which is the outcome this protocol exists to detect. The
-held-out number is the one reported.
+Each re-measurement cost the headline size and cost it certainty. The
+selection-set figure was inflated about 2.9×; correcting the harness took
+another 28% off what remained and turned one seed negative. The direction has
+survived all three; nothing else has.
 
 ### What Claim B is not
 
@@ -258,12 +296,30 @@ open and quantified.
 
 ## The compliance gate
 
-The agent proposes; the gate disposes. Not by convention — structurally. An
-executor accepts only an `ApprovedAction`, and one cannot be minted outside
-`rebound.compliance`, so there is no path from "I'd like to retry this" to "a
-retry happened" that skips adjudication. The alternative design, a
+The agent proposes; the gate disposes. `ComplianceGate.adjudicate` is the only
+way to mint an `ApprovedAction` through any ordinary route: direct construction
+raises, and `dataclasses.replace` — which copies every field through, and so
+once turned an approved retry into an approved voice call — has no token to
+pass, because the token is init-only. The alternative design, a
 `check_compliance()` call before acting, is correct only as long as every future
 call site remembers one line, and that failure is silent.
+
+**Two things this is not, both found by an outside evaluator.** An
+`ApprovedAction` *can* be minted by `object.__new__` and `__setattr__`, by
+subclassing, by harvesting the module-private token, or by unpickling — and it
+can be altered in place the same way. The threat model here is an author who
+forgets a line next year, not sabotage, and against that the design holds; but
+"cannot be minted outside `rebound.compliance`" was stated absolutely and is
+not true absolutely.
+
+And the guarantee is **narrower than the execution boundary**. `World.apply`
+takes a bare `Action` and `evaluate_policy` takes a plain `Decision`, so every
+Claim B number is produced by a path with no approval object in it — the
+baselines are deliberately ungated, which is the point of comparing against
+them. The only consumer of an `ApprovedAction` today is the comms layer, where
+a message cannot be composed for an action the gate did not permit. That is a
+real structural guarantee about what a customer receives, and it is not the
+same as a structural guarantee about what gets presented to a rail.
 
 **Three verdicts, not two.** A gate that only says yes or no turns every timing
 rule into a lost recovery — "denied" tells a sequencer to abandon a retry that is
@@ -324,8 +380,8 @@ By the time a drafter runs, everything carrying money or legal exposure is alrea
 **whether** to contact by the sequencer's expected value, **when** by the gate's deferral
 arithmetic, the amount and rail by the record, and — the one that matters most — **what
 the customer is told to do**, derived from the failure's disposition by `comms.ask_for`.
-What is left is a language problem: say this, to this person, in Hinglish, inside 134
-characters.
+What is left is a language problem: say this, to this person, in
+Hinglish, inside one GSM-7 segment.
 
 The instruction is the boundary worth defending. A model that picks its own ask will
 eventually tell a customer whose balance was short to replace a card that is fine. They
@@ -420,5 +476,29 @@ reproduces the original attack. See [docs/SECURITY_REVIEW.md](docs/SECURITY_REVI
 
 ```bash
 uv sync
-uv run pytest
+uv run python scripts/demo.py
+```
+
+Forty seconds, no API key, no network. It walks one batch of failed debits all
+the way through: the taxonomy deciding which actions are legal, the gate
+answering allow / defer / deny with its reasons, three messages composed in
+English, Hinglish and Hindi with their SMS segment costs, six hostile drafts
+being refused, the full policy comparison, and the exception list with a reason
+per episode.
+
+Everything in it is the shipped code — the totals come from the same rollout
+harness the Claim B table comes from, and the verdicts from the same gate.
+
+There was no such command until an outside evaluator pointed out that a reader
+could run the test suite and three analysis scripts and never once see the
+system do its job. It found a bug on its first run: the templates were still
+signing with the full legal entity after the sender check had moved off it, so
+a realistic merchant name pushed a Hindi SMS past its UCS-2 budget and the
+fallback failed — meaning nothing would have been sent at all.
+
+```bash
+uv run pytest                              # 827 tests
+uv run python scripts/evaluate_comms.py    # verifier red team, 28/28 + 5 holes
+uv run python scripts/holdout.py           # Claim B, five held-out seeds (slow)
+uv run python scripts/train_model.py       # Claim A, both splits
 ```

@@ -21,11 +21,11 @@
 | 07 | Two-headed model (timing + action) | ✅ done — 385 tests |
 | 07a | **Independent audit of the model layer + fixes** | ✅ done — 6 findings fixed, 387 tests |
 | 08 | Compliance gate (non-bypassable) | ✅ done — 9 rules, reviewed, 434 tests |
-| 09 | Sequencer / agent policy | ✅ done — beats the ladder 4/4 seeds |
+| 09 | Sequencer / agent policy | ✅ done — held-out seeds, see Claim B |
 | 09a | Fitted Q-iteration | ✅ built, measured, **not shipped** — diagnosed |
 | 10 | LLM comms layer (Hinglish/multilingual) | ✅ done — 13 checks, 28/28 red team, 5 holes documented, 333 tests, 27/27 mutations, live path unrun |
 | 11 | Batch runner + demo dashboard | ⬜ not started |
-| 12 | README, metrics writeup, provenance table | ⬜ not started |
+| 12 | README, metrics writeup, provenance table | 🟡 in progress — README and provenance doc written, final pass pending |
 
 Legend: ⬜ not started · 🟡 in progress · ✅ done
 
@@ -265,7 +265,7 @@ Achieved vs target at n≈45k/19k/19k: UPI 0.5522 / 0.550, eNACH 0.3130 / 0.310,
 no source). Machine-checked: tests fail if a parameter has no entry, or claims
 ANCHORED/DERIVED without citing a source.
 
-Current split is **1 anchored / 4 derived / 21 assumed** — 81% assumptions. Published
+Current split is **1 anchored / 5 derived / 21 assumed** of 27 — 78% assumptions. Published
 in `docs/DATA_PROVENANCE.md` as the opening paragraph rather than buried, because it is
 the first number a panel will try to extract and volunteering it is worth more than
 defending it.
@@ -604,7 +604,9 @@ already fixed by code that was measured or by a regulation that was cited:
 deferral arithmetic, the amount and rail by the record, and - the one that
 matters most - *what the customer is told to do*, derived from the failure's
 disposition in `comms.ask_for`. What is left is a language problem: say this,
-to this person, in Hinglish, inside 134 characters.
+to this person, in Hinglish, inside one GSM-7 segment.
+
+(That line said "inside 134 characters" until an outside evaluator pointed out that 134 is *Hindi's* two-segment UCS-2 budget. Hinglish is GSM-7 and gets 306; the shipped Hinglish templates already run to 140. The rhetorical flourish had quietly attributed one language's constraint to another, in the section that is otherwise exact.)
 
 The instruction is the boundary worth defending. A model that picks its own ask
 will eventually tell a customer whose balance was short to replace a card that
@@ -844,6 +846,110 @@ Twenty-seven mutations, twenty-seven caught. 818 tests, 333 in this layer. The
 red team is 28 of 28 with five documented holes — and the link check now has
 seven probes rather than three, sitting on the boundary rather than well inside
 it.
+
+### D33 - Two sweeps, and the harness was the problem (2026-08-25)
+
+A white-box bug hunt over everything built before the comms layer, and a
+black-box evaluation that was denied the source and given only what a judge
+sees. Fifteen findings each. The two worst were in the same place, and it is the
+place D1 says was built first precisely so it could not be bent to flatter the
+model. It was not bent. It was porous, in a way nothing tested for.
+
+**A policy could read the simulator's random stream out of its own episode id.**
+The per-episode seed was `seed + index` and the id was `EV_{index:08d}`, so the
+index of the stream a policy was about to face was handed to it. A demonstration
+policy that reconstructed the uniforms and burned 2-paise emails to align its
+single retry took recovery from 0.505 to 0.754 and net value up 7.4x. No
+integrity check fired, because nothing was tampered with. It read.
+
+**And common random numbers were not common.** The passive-churn draw settling
+an episode came from the same stream the policy had been consuming, so the
+settlement outcome depended on how many draws the policy had made. The hazard
+itself was provably identical across policies (max difference 0.0) and outcomes
+still differed on 15.75% of episodes. Across the baselines that was 177,000 to
+319,000 rupees per thousand episodes of pure alignment noise against a policy
+gap of 316,000 - and on a second batch it reversed the ordering of two
+baselines outright.
+
+Both have one cause: every draw came from one sequential stream, so *which*
+uniform met an action depended on how many draws preceded it. Draws are now
+addressed by purpose and by ordinal within their own kind, so the third debit
+presentation always meets the same uniform whatever else happened. Emails cannot
+move it, because emails are not debit presentations. The id is hashed so the
+index is not free. What that does *not* claim is written into `EpisodeEntropy`:
+reproducibility from a published seed and secrecy from someone holding that seed
+cannot both hold, and this is a measurement harness, not a sandbox. The exploit
+is dead because it is useless, not because it is hard.
+
+**Re-seeding immediately exposed a hole.** `test_no_policy_recovers_money_from_
+a_terminal_failure` calls itself "a structural guarantee, not a statistical
+one". It was statistical: `_apply_collect_link` was the only path that recovered
+money without consulting `mandate_alive`, and it passed only because the old
+draw ordering never happened to pay a link on those 150 episodes. Re-addressed,
+`aggressive_contact` collected Rs 394 from a closed account. Second time in this
+project that a guarantee turned out to hold for one alignment of the dice.
+
+**Four more that changed measured numbers.** The retry cap counted in-episode
+presentations against a cycle-wide limit, permitting a fifth against a cap of
+four on 19% of episodes while the denial text said "4 against a cap of 4" - two
+rules in one file disagreeing about whether the debit that opened the episode
+had happened, and the one citing a regulator was wrong. Alt-rail retries were
+priced on the rail they left, all three wrong, UPI-to-card under-charged 6x on
+the most common rail. The world never re-checked mandate expiry once an episode
+opened, so the ladder collected Rs 10,060 the gate calls uncollectable and the
+gate-bound sequencer was denied - policies compared under different rules. And
+81% of `disposition_rules`' "we drove them away" exception lines blamed contact
+for passive churn, reading a flag that was already recorded correctly and
+ignored.
+
+**The headline number had no reproduction path.** PROGRESS cited
+`runs/holdout.py` for Claim B; the file lived outside the repository the whole
+time, because run artefacts were moved there when the scratchpad kept being
+wiped. The recorded output matches every published figure exactly, so the number
+was real - and unverifiable by anyone else, which is the standard this document
+uses to withdraw other claims. It is now `scripts/holdout.py`.
+
+**And two guarantees were stated more absolutely than they hold.** An
+`ApprovedAction` can be minted by `object.__new__`, by subclassing, by
+harvesting the module-private token, and by unpickling, and altered in place the
+same way; the design defeats every accidental route, which is the stated threat
+model, but "cannot be minted outside `rebound.compliance`" is not true
+absolutely. More importantly, *no executor in the package accepts one* -
+`World.apply` takes a bare `Action`, so every Claim B number comes through a
+path with no approval in it. The structural guarantee is real for the comms
+layer and does not reach the execution boundary. Both now say so.
+
+**The drafter could rewrite the brief it was verified against.** `MessageBrief`
+is frozen against assignment but not against `object.__setattr__`, and the live
+object was handed over - so a drafter could move `brief.link` to a host it
+controlled, quote it, and have the verifier confirm the match. `vahan-secure.ru`
+came back cleared with `fell_back=False`. The check was not evaded; the ground
+truth was moved. Structurally the same defect the harness had, and fixed the
+same way: the drafter gets a copy, the original is what the draft is checked
+against.
+
+Also fixed: `_split_holdout` silently abandoning group atomicity on a degenerate
+boundary (verified not to fire on either shipped regime, which is why it now
+raises); `slice_report` reporting the whole frame per slice on a non-unique
+index, in the function whose docstring says every expensive mistake here was
+invisible in the aggregate; `_null_report` scoring a crashed policy at zero and
+sorting it to the top; `regulation.py`'s window helpers stripping tzinfo;
+`SpendBudget` denying everything below four paise through integer truncation and
+calling it an exhausted budget.
+
+**The mutation runner lied to me twice.** Four "survivors" were stale patterns
+that no longer matched the rewritten source - `perl` changes nothing and exits
+0, so a dead mutation reads as a hole in the tests. It now refuses to score a
+mutation that did not change the file. A fifth was worse: `_COERCION_STEMS = ()
+or (...)` evaluates to the right operand, so the file changed and the behaviour
+did not. And one genuine survivor was a test of mine that set `body="x"` on the
+object it was probing with, which fails the length check on its own, so the
+guard under test was never reached.
+
+**Every number in this document is now pending re-measurement.** Claim A and
+Claim B were both produced by code that has since changed in ways that move
+them. They are being re-run; whatever comes back is what gets published,
+including if it is worse.
 
 ## Evaluation splits
 

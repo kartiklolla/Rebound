@@ -7,15 +7,21 @@ Where the numbers come from, what is real, and what is not.
 The data is **entirely synthetic**. No production traffic, no real customers, no
 real mandates.
 
-Of the 26 behavioural parameters governing the simulated world:
+Of the 27 behavioural parameters governing the simulated world:
 
 | Provenance | Count | Share |
 |------------|-------|-------|
 | `ANCHORED` — traceable to a published figure | 1 | 4% |
-| `DERIVED` — computed from published figures, reasoning recorded | 4 | 15% |
-| `ASSUMED` — judgement, no source | 21 | 81% |
+| `DERIVED` — computed from published figures, reasoning recorded | 5 | 19% |
+| `ASSUMED` — judgement, no source | 21 | 78% |
 
-Four fifths of the parameters are assumptions. That is the honest number and it
+These counts come from `PARAM_PROVENANCE` and were stale until an outside
+evaluator recomputed them: this table said 26 parameters, 4 derived and 81%
+assumed. A provenance table that has itself drifted is worse than no provenance
+table, since it is the first thing a reader checks and the last thing they
+would think to re-derive.
+
+Just over three quarters of the parameters are assumptions. That is the honest number and it
 is stated here rather than left to be discovered. What follows is the argument
 for why the results are still worth something, and — more importantly — exactly
 which results are *not*.
@@ -34,7 +40,12 @@ The assumed parameters are almost all **shapes**, not **levels**:
 - The dispersion of outage durations across banks
 
 The levels that matter most — the marginal failure rates the whole dataset is
-scaled to — are anchored or derived from published NPCI figures.
+scaled to — are anchored or derived from published NPCI figures on two of three
+rails. `enach_failure_rate` is `ANCHORED` and `upi_failure_rate` is `DERIVED`;
+**`card_failure_rate` is `ASSUMED`** and has no row in the anchor table below,
+while the calibration table reports its achieved rate alongside the other two
+without saying so. Card-on-file results carry the weaker version of this
+argument, and the calibration table is marked accordingly.
 
 This matters because of how the claims are scoped:
 
