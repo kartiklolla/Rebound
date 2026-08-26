@@ -2,7 +2,7 @@
 
 Run with::
 
-    uv run python scripts/evaluate_sequencer.py            # full, ~7 minutes
+    uv run python scripts/evaluate_sequencer.py            # full, ~25 minutes on 8 cores
     uv run python scripts/evaluate_sequencer.py --quick     # ~40 seconds
 
 Reports the sequencer against the production-standard fixed ladder under
