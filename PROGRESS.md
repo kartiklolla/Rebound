@@ -23,8 +23,8 @@
 | 08 | Compliance gate (non-bypassable) | ✅ done — 9 rules, reviewed, 434 tests |
 | 09 | Sequencer / agent policy | ✅ done — held-out seeds, see Claim B |
 | 09a | Fitted Q-iteration | ✅ built, measured, **not shipped** — diagnosed |
-| 10 | LLM comms layer (Hinglish/multilingual) | ✅ done — 13 checks, 28/28 red team, 5 holes documented, 333 tests, 27/27 mutations, live path unrun |
-| 11 | Customer portal + operations dashboard | ✅ done — two-sided local site over a real batch, 838 tests |
+| 10 | LLM comms layer (Hinglish/multilingual) | ✅ done — 13 checks, 28/28 red team, 5 holes documented, 356 tests, live path unrun |
+| 11 | Customer portal + operations dashboard | ✅ done — two-sided local site over a real batch, 846 tests |
 | 12 | README, metrics writeup, provenance table | 🟡 in progress — README and provenance doc written, final pass pending |
 
 Legend: ⬜ not started · 🟡 in progress · ✅ done
@@ -842,7 +842,7 @@ guard could not see it. And one genuine survivor was a test of mine that set
 `body="x"` on the object it was probing with, which fails the length check on
 its own, so the guard under test was never reached.
 
-Twenty-seven mutations, twenty-seven caught. 818 tests, 333 in this layer. The
+Twenty-seven mutations, twenty-seven caught at the time — with an uncommitted runner that has since been lost. `scripts/mutation_check.sh` replaces it: sixteen mutations against today's source, all caught, and it refuses to score one that did not change the file. The
 red team is 28 of 28 with five documented holes — and the link check now has
 seven probes rather than three, sitting on the boundary rather than well inside
 it.
@@ -1024,6 +1024,16 @@ new signups.
 Filled in as they land. Empty cells are honest — they mean not yet measured.
 
 ### Claim A — recovery-probability model
+
+> **SUPERSEDED.** Every figure in this section predates the harness and world
+> fixes of D33 and does not match the code. The current numbers are in the
+> README's Claim A table and regenerate with `scripts/train_model.py`; the run
+> today reports 163,129 decision points · 43,789 episodes · 5,981 customers,
+> time PR-AUC 0.6045 (not 0.6213) and ECE 0.0257 (not 0.0108). It is kept
+> rather than deleted because the *shape* of the analysis — per-slice, per
+> disposition, the two deleted features — is still the argument; the digits
+> are not. A section asserting "nothing here is carried over by hand" while
+> contradicting the README on every row is worse than no section.
 
 162,743 decision points · 43,657 episodes · 5,974 customers · 30 selectable features.
 Seed 20260821. Both splits verified clean before scoring. Every number below is from a

@@ -93,12 +93,18 @@ figure is 2.5× that, so the calibrator generalises across customers and not
 across time. The policy multiplies these probabilities by rupee amounts, so
 this is the figure to be least comfortable with.
 
-**The caveat belongs next to the number, not below it.** The action head's ROC-AUC of 0.919
+**The caveat belongs next to the number, not below it.** The action head's ROC-AUC of 0.918
 is mostly the model separating hopeless failure dispositions from live ones — which the
 failure taxonomy already encodes. Within disposition, where the decisions are actually
-hard, discrimination falls to 0.72–0.86 on the time split, and `merchant_fix` on the
-customer split is 0.64. Lift over the failure-code prior is +0.073 PR-AUC: real, but
-modest.
+hard, discrimination falls to **0.72–0.82** on the time split (`terminal` is the outlier
+at 0.97, and it is the easy one). On the customer split **`merchant_fix` is 0.55 on 462
+rows — essentially chance.** Lift over the failure-code prior is **+0.064** PR-AUC on
+time, +0.110 on customer: real, but modest.
+
+Those four figures were 0.72–0.86, 0.64 and +0.073 until an outside reviewer recomputed
+them. Every one had drifted in the flattering direction, in the paragraph whose entire
+job is to name this model's weakness — the headline table above had been regenerated and
+the prose around it had not.
 
 **Two heads, compared honestly.** The heads cannot be ranked by reading their headline
 numbers against each other — those are computed on different rows, against different
@@ -166,7 +172,7 @@ and all with regression tests:
   checking. Both passed while the defect they were named for was present in the data.
 - **The two-head comparison was not like-for-like** — corrected above.
 - **Excluding `customer_id` does not prevent customer memorisation.** The tuple
-  `(bank, billing_day, amount, ceiling, rail)` is unique across all 5,974 customers, and
+  `(bank, billing_day, amount, ceiling, rail)` is unique across all 5,981 customers, and
   no allowlist can drop it without dropping five legitimate features. Quantified in
   `eval/splits.py`, and it is the reason the customer split is reported at all.
 
@@ -197,7 +203,7 @@ sequencer loses to the fixed ladder on one of the five held-out seeds. The
 direction is consistent and the effect is not resolved by five seeds — that is
 the honest description, and it is weaker than what this README said a day ago.
 
-**Every net figure is negative, the ladder's included.** "Ahead" means less bad,
+**Every net figure in this table is negative, the ladder's included.** "Ahead" means less bad,
 not profitable. These are simulator rupees — read the ordering, not the
 magnitudes.
 
@@ -275,11 +281,18 @@ carried forward.
 
 **Not converged in training scale.** How much training log the policy's models
 are fitted on moves the headline further than the headline itself. At a tenth
-scale, `scripts/evaluate_sequencer.py --quick` puts the sequencer **158,186 behind** the
-ladder where the full run puts it 29,680 ahead, inverts the ordering of the
-contact-enabled and no-contact configurations, and lifts `disposition_rules`
-above `fixed_ladder` where at full scale it is well below. A reduced-scale run is
-not a small version of this experiment — it is a different, weaker model.
+scale, `scripts/evaluate_sequencer.py --quick` puts the sequencer **304,955 behind** the
+ladder, puts fitted Q **124,644 ahead** of the shipped policy, and inverts the
+contact-enabled and no-contact configurations. At full scale the sequencer leads the
+ladder and Q loses 4/4. A reduced-scale run is not a small version of this experiment —
+it is a different, weaker model, and its ordering carries no information.
+
+The script says so on its own output now. It used to print *"policy ordering holds;
+magnitudes do not"* above a table where the ordering plainly did not hold, and a fixed
+caption reading *"the hand-built expected value beat it 4/4"* above a table where Q was
+ahead. Both now read the run they are printed under — the same defect as the +100.0%
+incident above, arriving as prose instead of arithmetic. `scripts/demo.py` had the
+matching hole and now names the winner when a baseline beats us.
 
 An earlier version of this section reported a 1,200 / 3,000 / 6,000 training-log
 sweep. Its contact-enabled row no longer reproduces — the 6,000-customer cell
@@ -368,8 +381,10 @@ distribution is confident and reproducible and still wrong. Choosing by measurem
 only better than choosing by assumption if the measurement is taken under the right
 regime.
 
-An LLM is used where language is genuinely the problem — customer communication and the
-merchant-facing root-cause narrative.
+An LLM is used in exactly one place: writing the words of a customer message. Nowhere
+else. An earlier draft of this section also claimed a "merchant-facing root-cause
+narrative" — that feature does not exist, and claiming a second use of a model inside
+the section arguing for restraint was the most self-defeating sentence in the document.
 
 ## The comms layer: the model writes, it does not decide
 
@@ -454,8 +469,9 @@ clean run on the lexical ones is not read as a guarantee.
 
 ### Status of the live path
 
-The verifier, the templates and the desk are exercised by 333 tests, including 27
-mutations of the source that the suite catches. Ten of those tests build nothing by hand:
+The verifier, the templates and the desk are exercised by 356 tests. Sixteen mutations
+of the source — each disabling a guarantee this README claims — are all caught by the
+suite; run `./scripts/mutation_check.sh` to check that yourself. Ten of those tests build nothing by hand:
 they sample a population, take the debits that actually failed, adjudicate through a real
 compliance gate, and compose from the resulting approval. That is how the two worst
 defects in this layer were found. **The live API path has not been run** —
@@ -479,7 +495,7 @@ uv sync
 uv run python scripts/demo.py
 ```
 
-Forty seconds, no API key, no network. It walks one batch of failed debits all
+About a minute, no API key, no network. It walks one batch of failed debits all
 the way through: the taxonomy deciding which actions are legal, the gate
 answering allow / defer / deny with its reasons, three messages composed in
 English, Hinglish and Hindi with their SMS segment costs, six hostile drafts
@@ -490,7 +506,7 @@ Everything in it is the shipped code — the totals come from the same rollout
 harness the Claim B table comes from, and the verdicts from the same gate.
 
 `scripts/dashboard.py` builds and serves the two-sided site: a customer portal
-with six test accounts, one per failure disposition, where every request is
+with one test account per failure disposition, where every request is
 answered by the live gate and the live priced model; and an operations console
 showing what bound each decision, what the model weighed, and the batch's money
 and exception list. Nothing in that page recomputes a decision — a second
@@ -505,7 +521,8 @@ fallback failed — meaning nothing would have been sent at all.
 
 ```bash
 uv run python scripts/dashboard.py         # two-sided demo site on :8000
-uv run pytest                              # 838 tests
+./scripts/mutation_check.sh                # break the source, confirm the suite notices
+uv run pytest                              # 846 tests, ~60s
 uv run python scripts/evaluate_comms.py    # verifier red team, 28/28 + 5 holes
 uv run python scripts/holdout.py           # Claim B, five held-out seeds (slow)
 uv run python scripts/train_model.py       # Claim A, both splits
