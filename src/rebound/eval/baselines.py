@@ -225,12 +225,20 @@ class DispositionAwareRules(Policy):
         ready = episode.notification_sent_at + dt.timedelta(
             hours=PRE_DEBIT_NOTIFICATION_HOURS + 1
         )
-        at = max(now, ready)
-        if episode.rail is Rail.UPI_AUTOPAY:
-            at = _next_upi_window(at)
+        # No UPI window adjustment here, unlike every sibling handler. The only
+        # MERCHANT_FIX code in the taxonomy is a card failure, so this branch is
+        # only ever reached on card_on_file and a UPI check could not fire. It
+        # was there, and an exhaustive sweep found it unreachable; leaving dead
+        # code that looks load-bearing is how a reader learns to distrust the
+        # rest. If a MERCHANT_FIX code is ever added on UPI, the assertion below
+        # is what will say so.
+        assert episode.rail is not Rail.UPI_AUTOPAY, (
+            "a MERCHANT_FIX failure on UPI now exists; this handler needs the "
+            "execution-window adjustment its siblings have"
+        )
         return Decision(
             action=Action.RETRY_SAME_RAIL,
-            at=at,
+            at=max(now, ready),
             reason="notification window elapsed; re-present",
         )
 

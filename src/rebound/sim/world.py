@@ -620,7 +620,6 @@ class World:
         mandate: Mandate,
         customer: Customer,
         at: dt.datetime,
-        notification_sent: bool = True,  # noqa: ARG002 - see below
         rng: np.random.Generator | None = None,
     ) -> str | None:
         """Failure code for a debit presented at ``at``, or ``None`` if it succeeded.
@@ -646,9 +645,6 @@ class World:
 
         if mandate.cycle_amount_paise > mandate.ceiling_paise:
             return self._ceiling_code(mandate.rail)
-
-        if mandate.rail is Rail.CARD_ON_FILE and not notification_sent:
-            return "CARD_PRE_DEBIT_NOTIFICATION_MISSING"
 
         if mandate.rail is Rail.UPI_AUTOPAY and not within_upi_execution_window(at):
             # Refused by the rail, not declined by the bank. Presents to the
