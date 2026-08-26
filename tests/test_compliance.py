@@ -299,12 +299,28 @@ def test_the_execution_window_binds_only_upi():
 
 
 def test_the_retry_cap_denies_beyond_the_scheme_limit():
-    from rebound.regulation import MAX_EXECUTIONS_PER_CYCLE, MAX_RETRIES_PER_CYCLE
+    """Counted in presentations, including the one that opened the episode.
 
-    cap = MAX_EXECUTIONS_PER_CYCLE + MAX_RETRIES_PER_CYCLE
-    assert RetryCap().check(make_request(debit_attempts=cap - 1)) is None
-    capped = RetryCap().check(make_request(debit_attempts=cap))
-    assert capped is not None and capped.verdict is Verdict.DENY
+    Written out rather than re-derived from the constants. The previous
+    version computed the expected boundary with the same arithmetic the rule
+    used, so it agreed with the rule by construction and could not see that
+    both were wrong: ``debit_attempts`` counts presentations *inside* the
+    recovery episode, and an episode exists because a scheduled debit already
+    went out and failed. Comparing an in-episode count against a cycle-wide cap
+    allowed a fifth presentation against a cap of four, on 19% of episodes,
+    while the denial text said "4 against a cap of 4".
+
+    So: 1 original + 3 retries = 4, the scheme limit. The third in-episode
+    retry is the last one permitted; a fourth is denied.
+    """
+    assert RetryCap().check(make_request(debit_attempts=0)) is None
+    assert RetryCap().check(make_request(debit_attempts=1)) is None
+    assert RetryCap().check(make_request(debit_attempts=2)) is None
+
+    denied = RetryCap().check(make_request(debit_attempts=3))
+    assert denied is not None and denied.verdict is Verdict.DENY
+    # And it reports the true count, not the in-episode one.
+    assert "4 presentations" in denied.reason
 
 
 def test_the_retry_cap_counts_presentations_not_nudges():
@@ -319,7 +335,7 @@ def test_the_retry_cap_counts_presentations_not_nudges():
     nudged = make_request(attempts=99, debit_attempts=0)
     assert RetryCap().check(nudged) is None
 
-    presented = make_request(attempts=99, debit_attempts=4)
+    presented = make_request(attempts=99, debit_attempts=3)
     ruling = RetryCap().check(presented)
     assert ruling is not None and ruling.verdict is Verdict.DENY
 

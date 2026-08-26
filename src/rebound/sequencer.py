@@ -88,7 +88,11 @@ from rebound.compliance import ComplianceGate, Request, Verdict
 from rebound.economics import (
     LTV_HORIZON_CYCLES as _LTV_HORIZON,
 )
-from rebound.economics import attempt_cost_paise, revocation_cost_paise
+from rebound.economics import (
+    attempt_cost_paise,
+    presenting_rail,
+    revocation_cost_paise,
+)
 from rebound.fqi import FittedQ
 from rebound.model import (
     COLLECTING_ACTIONS,
@@ -649,7 +653,9 @@ class Sequencer(Policy):
                 p_recover=float(p_recover[i]),
                 p_revoke=float(p_revoke[i]),
                 value_paise=episode.cycle_amount_paise,
-                cost_paise=attempt_cost_paise(action, episode.rail),
+                cost_paise=attempt_cost_paise(
+                    action, presenting_rail(action, episode.rail)
+                ),
                 revocation_cost_paise=destroyed,
                 passive_revocation_rate=self.pricer.passive_revocation_rate,
                 fatigue_delta=fatigue_delta.get(i, 0.0),

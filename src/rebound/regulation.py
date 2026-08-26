@@ -200,6 +200,7 @@ def next_execution_window_open(at: dt.datetime) -> dt.datetime:
     legal four hours from now; "not before 13:00" tells it to wait. A compliance
     layer that can only say no turns every timing rule into a lost recovery.
     """
+    _require_naive(at, "next_execution_window_open")
     if within_upi_execution_window(at):
         return at
 
@@ -213,8 +214,32 @@ def next_execution_window_open(at: dt.datetime) -> dt.datetime:
     return dt.datetime.combine(at.date() + dt.timedelta(days=1), first_start)
 
 
+def _require_naive(at: dt.datetime, where: str) -> None:
+    """Refuse an aware datetime rather than quietly discarding its offset.
+
+    Every window constant here is an IST-local wall-clock time with no tzinfo.
+    ``dt.datetime.combine(at.date(), start)`` drops the offset, so an aware
+    input produced a naive output — a "next window open" that could not even be
+    compared against the input it was derived from without raising, and that
+    silently answered in a different frame of reference from the question.
+
+    This module is documented as production logic independent of the simulator,
+    and these are its public entry points. ``Request.__post_init__`` and the
+    harness both reject aware datetimes before they get here, so nothing
+    shipped reaches this — which is exactly why it should raise rather than
+    keep working by accident.
+    """
+    if at.tzinfo is not None:
+        raise ValueError(
+            f"{where} takes naive IST wall-clock time; got {at!r}. The window "
+            "constants carry no tzinfo, so an aware datetime would be compared "
+            "against naive boundaries. Convert at the edge of the system."
+        )
+
+
 def next_contactable_moment(at: dt.datetime) -> dt.datetime:
     """The earliest moment at or after ``at`` outside quiet hours."""
+    _require_naive(at, "next_contactable_moment")
     clock = at.time()
     if QUIET_HOURS_END <= clock < QUIET_HOURS_START:
         return at

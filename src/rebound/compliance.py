@@ -1,10 +1,27 @@
 """The compliance gate: the agent proposes, the gate disposes.
 
-Every action taken against a customer passes through here. Not by convention —
-structurally. ``execute()`` in the sequencer accepts an ``ApprovedAction``, and
-an ``ApprovedAction`` cannot be constructed outside this module. A policy that
-wants to skip the gate has to import a private sentinel and pass it explicitly,
-which is not something anyone does by accident and shows up in a diff.
+Every action a *customer* sees passes through here. ``MessageBrief.build``
+accepts an ``ApprovedAction`` and nothing else, and one cannot be constructed by
+any ordinary route outside this module — direct construction raises, and
+``dataclasses.replace`` has no token to pass. A caller that wants to skip the
+gate has to import a private sentinel and pass it explicitly, which nobody does
+by accident and which shows up in a diff.
+
+Two limits on that, both found by an outside evaluator and both worth stating
+where the claim is made rather than in a footnote:
+
+*The scope is narrower than "every action".* ``World.apply`` takes a bare
+``Action`` and ``evaluate_policy`` takes a plain ``Decision``, so the simulator's
+execution boundary has no approval in it — deliberately, since the baselines are
+meant to be ungated, but it means the guarantee covers what a customer receives
+and not what is presented to a rail.
+
+*And it is not absolute.* ``object.__new__`` plus ``__setattr__``, subclassing,
+harvesting ``_APPROVAL``, and unpickling all mint one, and the same route alters
+an existing one in place. The threat model here is an author who forgets a line
+next year, and against that the design holds; against someone deliberately
+reaching around it, it does not, and this module should not be read as claiming
+otherwise.
 
 Why it is built this way
 ------------------------
@@ -16,8 +33,8 @@ checker directly. This is the same shape of defect as the audit's finding that
 ``decision_index`` was *documented* as an identifier and never added to the
 identifier set — a comment, or a convention, is not a control.
 
-So the type system carries it. There is no path from "I would like to retry
-this" to "a retry happened" that does not pass through ``adjudicate``.
+So the type system carries it: there is no accidental path from "I would like to
+send this" to "a customer received it" that skips ``adjudicate``.
 
 Three verdicts, not two
 -----------------------
@@ -172,7 +189,15 @@ class Request:
     ceiling_paise: int
     valid_until: dt.date
     attempts: int
-    """Every action taken on this episode so far, contacts included."""
+    """Every action taken on this episode so far, contacts included.
+
+    No rule reads this — ``RetryCap`` binds on ``debit_attempts`` and the
+    contact rules on ``contacts_made``. It is carried because ``_as_dict``
+    walks ``fields()`` into the audit record, so every adjudication is stored
+    with the full state it was decided against. A reviewer reconstructing why
+    a decision went the way it did needs the numbers the rules did *not* use
+    as much as the ones they did.
+    """
 
     debit_attempts: int
     """Presentations against the mandate only.
@@ -387,6 +412,19 @@ class AfaCeiling:
     def check(self, request: Request) -> Ruling | None:
         if request.action not in DEBIT_ACTIONS:
             return None
+        # Applied to all three rails, deliberately and not by oversight. An
+        # outside reviewer flagged it as "a card rule applied to eNACH and UPI"
+        # and was explicit about not having checked the underlying regulation;
+        # RBI's e-mandate framework covers recurring e-mandates on cards, on
+        # accounts, and on UPI, so the wider scope is the defensible reading.
+        #
+        # It is recorded here rather than silently narrowed because narrowing
+        # it would fail in the dangerous direction — permitting an unauthorised
+        # debit — while the wide reading fails in the safe one, and the measured
+        # incidence is 3 of 6,898 episodes. The primary-source check is on
+        # regulation.py's unverified list, where AFA_EXEMPT_CEILING_PAISE is
+        # marked REPORTED rather than CONFIRMED; that is the thing to resolve,
+        # not this branch.
         if request.cycle_amount_paise > self.ceiling_paise:
             return Ruling(
                 self.rule_id,
@@ -441,6 +479,8 @@ class RetryCap:
     """
 
     max_presentations: int = MAX_EXECUTIONS_PER_CYCLE + MAX_RETRIES_PER_CYCLE
+    """Total presentations the cycle allows, the original debit included."""
+
     rule_id: str = "REG.RETRY_CAP"
     basis: Basis = Basis.REGULATORY
     source_key: str = "MAX_RETRIES_PER_CYCLE"
@@ -448,12 +488,25 @@ class RetryCap:
     def check(self, request: Request) -> Ruling | None:
         if request.action not in DEBIT_ACTIONS:
             return None
-        if request.debit_attempts >= self.max_presentations:
+        # ``debit_attempts`` counts presentations *within the recovery
+        # episode*, and the episode exists because a scheduled debit already
+        # went out and failed — which is stated explicitly in
+        # ``PreDebitNotificationRequired`` a few classes above. Comparing an
+        # in-episode count against a cycle-wide cap therefore granted one
+        # presentation too many: four in-episode retries plus the original is
+        # five against a cap of four, and the denial read "4 presentations
+        # already made against a cap of 4" while standing at five. Measured on
+        # a full run, 61 of 321 episodes (19%) reached that fifth presentation.
+        #
+        # Two rules in this file disagreed about whether presentation #1 had
+        # happened, and the one citing a regulator was the one that was wrong.
+        presentations = MAX_EXECUTIONS_PER_CYCLE + request.debit_attempts
+        if presentations >= self.max_presentations:
             return Ruling(
                 self.rule_id,
                 self.basis,
                 Verdict.DENY,
-                f"{request.debit_attempts} presentations already made against a "
+                f"{presentations} presentations already made against a "
                 f"cap of {self.max_presentations} for this cycle "
                 f"({MAX_EXECUTIONS_PER_CYCLE} original plus "
                 f"{MAX_RETRIES_PER_CYCLE} retries)",
@@ -555,6 +608,22 @@ class SpendBudget:
         if request.action in _ALWAYS_PERMITTED:
             return None
         budget = int(request.cycle_amount_paise * self.fraction_of_amount)
+        if budget == 0:
+            # Integer truncation, not an exhausted budget. Below four paise a
+            # quarter of the amount rounds to nothing, so the ordinary test
+            # `spent >= budget` read `0 >= 0` and denied every action before a
+            # single paise had been spent — reporting "budget exhausted" for an
+            # episode that had never been worked. Denying is still right, since
+            # no recovery action costs less than the amount at stake; saying
+            # why is the part that was wrong.
+            return Ruling(
+                self.rule_id,
+                self.basis,
+                Verdict.DENY,
+                f"a cycle amount of {request.cycle_amount_paise} paise cannot "
+                f"justify any recovery spend at "
+                f"{self.fraction_of_amount:.0%} of the amount",
+            )
         if request.spent_paise >= budget:
             return Ruling(
                 self.rule_id,
@@ -755,12 +824,35 @@ class ComplianceGate:
     def _settle_deferral(self, request: Request) -> tuple[dt.datetime | None, tuple[Ruling, ...]]:
         """Find a moment that satisfies every constraint at once.
 
-        Iterating is not decoration. Taking the latest proposed time assumes
-        each constraint means "permitted from T onward", and the execution
-        window does not: satisfying the notice requirement can land inside a
-        window that is closed. So the candidate is re-adjudicated until the
-        rules stop moving it, which is the only way to return a time the gate
-        will still honour when it arrives.
+        Iterating is the right shape and, on the current taxonomy, it never
+        actually iterates. Taking the latest proposed time assumes each
+        constraint means "permitted from T onward", and the execution window
+        does not: satisfying the notice requirement can land inside a window
+        that is closed. So the candidate is re-adjudicated until the rules stop
+        moving it.
+
+        **How often the second hop happens: never.** An exhaustive sweep of
+        148,608 requests — every failure code, every action ``legal_actions``
+        admits for it, 48 times of day, every notice age and attempt state —
+        found no case where two rules deferred at once. Hop counts came back
+        ``{1: 24924}``, and ``max_deferral_hops`` was never approached.
+
+        The two rules that could collide cannot co-occur.
+        ``PreDebitNotificationRequired`` binds only on ``MERCHANT_FIX``, whose
+        sole taxonomy member is a card failure; ``ExecutionWindow`` binds only
+        when the presenting rail is UPI, which for a card episode requires
+        ``RETRY_ALT_RAIL`` — and ``legal_actions(MERCHANT_FIX)`` excludes it.
+        ``QuietHours`` and ``ExecutionWindow`` are disjoint by construction,
+        since no action is both a contact and a debit.
+
+        Forcing a request past the taxonomy reproduces the documented
+        11:00 / 18:00 / 13:00 case exactly and settles it to 21:30, so the
+        arithmetic is right. It stays, because the collision becomes reachable
+        the moment a second ``MERCHANT_FIX`` code is added on another rail, and
+        because a gate that hands back a time it would itself refuse is the
+        worst failure this class has. But it is defensive code rather than
+        load-bearing code, and earlier versions of this docstring — and of
+        PROGRESS D21 — presented it as the latter.
 
         Returns ``(None, rulings)`` when no reachable moment clears every rule.
         """
@@ -845,8 +937,12 @@ class ComplianceGate:
     ) -> tuple[Action, ...]:
         """Which of a set of candidate actions the gate would allow right now.
 
-        The sequencer's real entry point: rather than proposing and being
-        refused, it asks what is available and chooses among those.
+        A convenience for a caller that would rather ask than propose. The
+        shipped sequencer does *not* use it — it calls ``adjudicate`` per
+        candidate, because it needs the deferral time and the binding ruling
+        for its own audit trail, and this returns neither. The docstring used
+        to call this "the sequencer's real entry point", which was true of a
+        design that was never built.
         """
         allowed = []
         for action, at in request_for:

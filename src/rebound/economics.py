@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from rebound.taxonomy import Action, Rail
+from rebound.taxonomy import ALT_RAILS, Action, Rail
 
 RUPEE = 100
 """Paise per rupee."""
@@ -95,10 +95,38 @@ CHANNEL_INTRUSIVENESS: dict[Action, float] = {
 LTV_HORIZON_CYCLES = 12
 
 
+def presenting_rail(action: Action, rail: Rail) -> Rail:
+    """The rail ``action`` actually presents on, given an episode's own rail.
+
+    One definition shared by the world and the sequencer, so that a price and
+    the presentation it is pricing cannot drift apart again. Mirrors
+    :meth:`rebound.compliance.Request.presenting_rail`, which cannot be reused
+    directly because it hangs off a request object the simulator never builds.
+    """
+    if action is Action.RETRY_ALT_RAIL:
+        alternatives = ALT_RAILS.get(rail, ())
+        return alternatives[0] if alternatives else rail
+    return rail
+
+
 def attempt_cost_paise(action: Action, rail: Rail) -> int:
     """Direct cost of taking ``action`` on a mandate presented over ``rail``.
 
     Retries are priced by rail; everything else by channel.
+
+    ``rail`` is the rail the action *presents on*. For ``RETRY_ALT_RAIL`` that
+    is not the episode's own rail, so callers pass :func:`presenting_rail`.
+
+    This was wrong on all three rails. The taxonomy, the compliance gate and
+    the world all agreed which rail an alt-rail retry lands on; the pricing
+    alone keyed on the rail it left. A UPI episode hopping to card was charged
+    50 paise for a 300-paise presentation — a 6x under-charge, on the most
+    common rail here, which made the sequencer's expected value systematically
+    over-rate hopping off UPI. eNACH and card hops were over-charged in the
+    other direction. ``Request.presenting_rail`` was written to fix precisely
+    this class of bug for execution windows, and its docstring says keying on
+    the original rail "got both directions wrong"; the same bug outlived that
+    fix here, in the function that decides what it costs.
     """
     if action in (Action.RETRY_SAME_RAIL, Action.RETRY_ALT_RAIL):
         return RAIL_ATTEMPT_COST_PAISE[rail]
@@ -226,5 +254,3 @@ class Ledger:
             attempts=self.attempts + other.attempts,
         )
 
-
-EMPTY_LEDGER = Ledger()
