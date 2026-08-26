@@ -178,7 +178,19 @@ def _split_holdout(
             late = frame[keys.isin(late_groups)].sort_values(ordered_by)
             if len(early) and len(late):
                 return early, late
-            # Degenerate boundary (every group straddles). Fall through.
+            # Every group straddles the cut, so no group-atomic split exists
+            # here. Falling through to the plain row cut below would silently
+            # produce the exact leakage the embargo prevents — the same episode
+            # on both sides of the calibration split — while ``dropped_rows_``
+            # still reported zero, so nothing would signal it. Verified not to
+            # fire on either shipped regime (0 groups on both sides, both
+            # splits), which is why it must raise rather than degrade: a silent
+            # fallback that never fires is one waiting for the data to change.
+            raise ValueError(
+                f"no group-atomic split of {group_by} exists at fraction "
+                f"{fraction}: every group spans the {ordered_by} cut, so a row "
+                f"cut would put the same {group_by} on both sides"
+            )
         else:
             keys_index = pd.Index(frame[group_by].unique())
             order = np.random.default_rng(seed).permutation(len(keys_index))

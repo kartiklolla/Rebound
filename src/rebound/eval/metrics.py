@@ -265,8 +265,18 @@ def slice_report(
         raise ValueError(f"{by!r} is not a column of the frame")
 
     rows = []
-    for value, index in frame.groupby(by, observed=True).groups.items():
-        mask = frame.index.isin(index)
+    # Grouped by position, never by index label. ``frame.index.isin(index)``
+    # matches *labels*, so any frame with a duplicated index — anything built
+    # by pd.concat without reset_index — selected every row carrying that
+    # label, and each slice reported the whole frame's metrics. This is the
+    # function whose docstring says every expensive mistake in this project so
+    # far was invisible in the aggregate; it would have been reporting the
+    # aggregate under a per-slice heading.
+    codes = frame.groupby(by, observed=True).ngroup().to_numpy()
+    labels = frame[by].to_numpy()
+    for code in np.unique(codes):
+        mask = codes == code
+        value = labels[mask][0]
         truth, probs = y_true[mask], y_prob[mask]
         n = int(mask.sum())
         scorable = n >= min_rows and len(np.unique(truth)) > 1
