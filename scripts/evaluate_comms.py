@@ -654,8 +654,16 @@ def run_live(model: str, repeats: int, verbose: bool) -> int:
         print("ANTHROPIC_API_KEY is not set.", file=sys.stderr)
         return 2
 
+    # An identity-linked key is rejected without a workspace header, and the
+    # SDK does not read one from the environment. Without this the whole run
+    # returns 30 fallbacks and a summary saying the system worked.
+    workspace = os.environ.get("ANTHROPIC_WORKSPACE_ID")
+    headers = {"anthropic-workspace-id": workspace} if workspace else None
+
     desk = CommsDesk(
-        drafter=AnthropicDrafter(client=anthropic.Anthropic(), model=model),
+        drafter=AnthropicDrafter(
+            client=anthropic.Anthropic(default_headers=headers), model=model
+        ),
         fallback=TemplateDrafter(),
     )
 

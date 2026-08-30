@@ -449,19 +449,48 @@ nothing by hand: they sample a population, take the debits that actually failed,
 through a real compliance gate, and compose from the resulting approval. That is how the two
 worst defects in this layer were found.
 
-**The live API path has not been run.** There is no API key in this environment, so every
-number above is measured against the verifier, the templates and a stub client. The request
-shape *is* verified against the installed SDK — a signature test asserts every argument we
-send exists on the real client, which is how a `temperature` parameter that does not exist on
-`anthropic` 1.0.0 was caught before it could raise on a first live call. What remains
-unmeasured is behavioural: what fraction of drafts pass first time, and which checks a real
-model trips.
+**Run live against `claude-sonnet-5`**, 30 briefs — three languages × ten
+ask/channel/rail combinations, one call each plus one repair where the first draft failed:
 
-```bash
-ANTHROPIC_API_KEY=... uv run python scripts/evaluate_comms.py --model --verbose
+| Language | First draft | Repaired | Fell back | Blocked |
+|---|---:|---:|---:|---:|
+| English | 10 | 0 | 0 | 0 |
+| Hinglish | 8 | 2 | 0 | 0 |
+| Hindi | 4 | 2 | **4** | 0 |
+
+**26 of 30 messages were written by the model; 4 were not good enough and a template went
+out instead.** Nothing unverified was sent, and nothing was blocked outright — every brief
+produced a sendable message by one route or the other.
+
+**Hindi is where the model struggles**, and it fails in the direction the design predicted.
+The checks tripped across all attempts:
+
+```
+script_matches_language  12     within_channel_budget  11     pre_debit_disclosure  3
+amount_is_exact          11     ask_is_honoured         8     renders_on_channel    2
+sender_is_identified     11
 ```
 
-30 briefs — three languages × ten ask/channel/rail combinations — at up to two calls each.
+Devanagari costs more than twice the per-segment budget, so a Hindi draft has the least room
+and the most ways to overrun it — which is exactly the case the fallback exists for. The
+fallback rate is therefore a measurement, not an embarrassment: it says the model is trusted
+for 100% of English, 100% of Hinglish, and 60% of Hindi.
+
+**A first attempt returned 30 fallbacks and a summary reading "the system working."** The key
+was identity-linked; the SDK does not read a workspace id from the environment, so every call
+raised a 400 and never reached the model. The exception was captured but only printed under
+`--verbose`, so the headline collapsed a total outage into a clean bill of health. Passing the
+workspace header is now handled in the script.
+
+```bash
+export ANTHROPIC_API_KEY=...
+export ANTHROPIC_WORKSPACE_ID=...   # only needed for an identity-linked key
+uv run python scripts/evaluate_comms.py --model --verbose
+```
+
+The request shape is *also* checked without a network call: a signature test asserts every
+argument we send exists on the real client, which is how a `temperature` parameter that does
+not exist on `anthropic` 1.0.0 was caught before it could raise on a first live call.
 
 ## Adversarial review
 
