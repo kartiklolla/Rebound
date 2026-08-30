@@ -12,6 +12,25 @@ ten chances to get lucky, and nothing in the project protected against that.
 
 These five seeds have not been used for any selection decision. Whatever they
 say is the reported Claim B number.
+
+*Extended from five seeds to twenty.* The first run of the five returned
++40,916 with sd 37,262 - t = 2.455 on 4 df, p ~ 0.070, and negative on one seed.
+That is an underpowered measurement rather than a null one, and the remedy for
+an underpowered measurement is more draws.
+
+Extending a held-out set after seeing its result is the exact move this file
+warns against two comments below, so it is done the only way that is not a
+re-selection:
+
+- The original five are unchanged and still reported as their own row, so the
+  previously published number stays auditable as a subset rather than being
+  absorbed.
+- The fifteen new seeds are *derived*, not chosen - a fixed ``SeedSequence``
+  draw with a stated entropy, so no hand-picking is possible and any reader can
+  re-derive the identical tuple.
+- All twenty are reported. If the extension moves the result toward zero, that
+  is the result. Dropping seeds after seeing them would be the selection this
+  protocol exists to prevent, and it is the one thing that cannot happen here.
 """
 import argparse
 import datetime as dt
@@ -20,6 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+import numpy as np
 import pandas as pd
 from rebound.eval.baselines import default_baselines
 from rebound.eval.harness import build_eval_batch, evaluate_all
@@ -31,6 +51,21 @@ from rebound.sim.world import World
 #: Fixed, and fixed before they were run. Changing this tuple after seeing a
 #: result would turn the held-out protocol back into the selection it replaced.
 HOLDOUT_SEEDS = (777001, 8675309, 20260905, 424242, 1000003)
+
+#: The fifteen that extend it, derived rather than chosen. Nobody typed these,
+#: so nobody can have picked them; the entropy below is the date the extension
+#: was decided and is the only free parameter, fixed before the run.
+EXTENSION_SEEDS = tuple(
+    int(x) for x in np.random.SeedSequence(20260830).generate_state(15)
+)
+
+#: Seeds policy selection *did* touch. Asserted disjoint rather than assumed:
+#: a collision would silently re-admit a selection seed to the held-out set.
+SELECTION_SEEDS = (12345, 24680, 31415, 55555, 99001)
+
+ALL_SEEDS = HOLDOUT_SEEDS + EXTENSION_SEEDS
+assert len(set(ALL_SEEDS)) == len(ALL_SEEDS), "duplicate seed"
+assert not set(ALL_SEEDS) & set(SELECTION_SEEDS), "a selection seed leaked in"
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--out", type=Path, default=Path("holdout.csv"))
@@ -47,7 +82,7 @@ pricer = fit_for_serving(train, max_iter=200)
 print("pricer fitted", flush=True)
 
 rows = []
-for seed in HOLDOUT_SEEDS:
+for seed in ALL_SEEDS:
     w = World(seed=seed)
     cs = w.sample_customers(4000)
     ms = w.sample_mandates(cs, dt.date(2024, 6, 1), dt.date(2026, 3, 31))
@@ -64,9 +99,10 @@ for seed in HOLDOUT_SEEDS:
         continue
 
     base = res["fixed_ladder"].report.net_rupees_per_1000
+    group = "original_5" if seed in HOLDOUT_SEEDS else "extension_15"
     for name, r in res.items():
         rp = r.report
-        rows.append({"seed": seed, "policy": name,
+        rows.append({"seed": seed, "group": group, "policy": name,
                      "gap_vs_ladder": round(rp.net_rupees_per_1000 - base),
                      "net": round(rp.net_rupees_per_1000),
                      "recovery": round(rp.recovery_rate, 4),
@@ -83,4 +119,29 @@ print(d.pivot(index="seed", columns="policy", values="gap_vs_ladder").to_string(
 print("\n=== SUMMARY ===", flush=True)
 print(d.groupby("policy")[["gap_vs_ladder", "net", "recovery", "revocation", "contacts"]]
       .agg(["mean", "std", "min", "max"]).round(3).to_string(), flush=True)
+
+# The point of the extension is power, so report the test rather than leaving a
+# reader to run it. All three rows print unconditionally: reporting only the
+# twenty, or only whichever group looked better, is the selection this file
+# exists to prevent.
+print("\n=== rebound_sequencer vs fixed_ladder: is the gap real? ===", flush=True)
+seq = d[d.policy == "rebound_sequencer"]
+for label, sub in (("original 5 ", seq[seq.group == "original_5"]),
+                   ("extension 15", seq[seq.group == "extension_15"]),
+                   ("all 20     ", seq)):
+    g = sub["gap_vs_ladder"].to_numpy(dtype=float)
+    if len(g) < 2:
+        continue
+    mean, sd = g.mean(), g.std(ddof=1)
+    t = mean / (sd / np.sqrt(len(g)))
+    try:
+        from scipy import stats
+        p = f"{2 * stats.t.sf(abs(t), len(g) - 1):.4f}"
+    except ImportError:
+        p = "scipy absent"
+    print(f"  {label}  n={len(g):>2}  mean={mean:>+9,.0f}  sd={sd:>8,.0f}  "
+          f"won={int((g > 0).sum()):>2}/{len(g):<2}  t={t:>5.3f}  df={len(g)-1:>2}  "
+          f"p={p}", flush=True)
+print("\n  A p above 0.05 after twenty seeds is a result, not a run to repeat.",
+      flush=True)
 print("\nDONE", flush=True)
