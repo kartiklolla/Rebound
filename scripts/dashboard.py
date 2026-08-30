@@ -397,10 +397,11 @@ def _policies(world: World, batch, pricer) -> dict:
             "recovered": round(e.recovered_paise / 100, 2),
             "detail": e.detail,
         }
-        for e in ours.audit[:400]
+        for e in ours.audit[:1200]
     ]
     return {
         "rows": rows,
+        "ladder_net": round(ladder),
         "exceptions": [
             {"reason": reason, "count": count, "share": round(count / max(1, len(ours.exceptions)), 4)}
             for reason, count in reasons.most_common()
@@ -488,6 +489,58 @@ def serve(port: int, open_browser: bool) -> None:
             print("\n  stopped.")
 
 
+def _report_demo_coverage(data: dict) -> None:
+    """Say which showcase cases this build actually contains.
+
+    The strongest thing to put on camera is an action the model priced
+    *positively* and a regulator refused anyway — permission beating profit,
+    in one row. Whether it exists depends on the batch, and finding that out
+    while recording is too late. So the build reports it, the same way the
+    disposition guard refuses a batch that would silently omit a branch.
+    """
+    found: dict[str, list[str]] = {
+        "regulator overruled a profitable action": [],
+        "permitted but not worth doing (done anyway)": [],
+        "deferred rather than denied": [],
+        "refused before the gate (structural)": [],
+    }
+    for account in data["accounts"]:
+        for answer_ in account["answers"]:
+            grading = answer_["grading"]
+            binding = next(
+                (r for r in answer_["rulings"] if r["binding"] and r["rule"] != "—"),
+                None,
+            )
+            where = f"{account['name']} · {answer_['label']}"
+            if (
+                answer_["outcome"] == "declined"
+                and binding
+                and binding["basis"] == "regulatory"
+                and grading
+                and grading["expected_value"] > 0
+            ):
+                found["regulator overruled a profitable action"].append(where)
+            if grading and not grading["worth_unprompted"] and answer_["outcome"] != "declined":
+                found["permitted but not worth doing (done anyway)"].append(where)
+            if answer_["outcome"] == "scheduled":
+                found["deferred rather than denied"].append(where)
+            if answer_["outcome"] == "declined" and not answer_["adjudicated"]:
+                found["refused before the gate (structural)"].append(where)
+
+    print("\n  Demo coverage — what this build can show on camera:")
+    for label, hits in found.items():
+        if hits:
+            print(f"    [ok]      {label}")
+            print(f"              e.g. {hits[0]}")
+        else:
+            print(f"    [MISSING] {label}")
+    if not found["regulator overruled a profitable action"]:
+        print(
+            "\n    The strongest case is absent from this batch. Try another "
+            "seed:\n      uv run python scripts/dashboard.py --seed 20260904"
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--episodes", type=int, default=1400)
@@ -502,6 +555,7 @@ def main() -> int:
     target = write_site(data)
     print(f"\n  Built {target.relative_to(ROOT)} "
           f"({len(data['accounts'])} accounts, {data['episodes']:,} episodes)")
+    _report_demo_coverage(data)
     if args.build:
         return 0
     serve(args.port, not args.no_open)
