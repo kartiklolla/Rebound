@@ -670,12 +670,18 @@ def run_live(model: str, repeats: int, verbose: bool) -> int:
     cases = live_briefs() * repeats
     failed_checks: collections.Counter[str] = collections.Counter()
     by_language: dict[Language, list[str]] = collections.defaultdict(list)
+    #: Why the drafter raised, deduplicated. A run where every call 400s and a
+    #: run where the model writes badly produce the same fallback count and
+    #: mean opposite things, and the difference is only in here.
+    drafter_errors: collections.Counter[str] = collections.Counter()
     blocked = 0
 
     for target in cases:
         result = desk.compose(target)
         for finding in result.findings:
             failed_checks[finding.check_id] += 1
+            if finding.check_id == "drafter_failed":
+                drafter_errors[finding.detail] += 1
         if not result.cleared:
             blocked += 1
             outcome = "BLOCKED"
@@ -714,6 +720,31 @@ def run_live(model: str, repeats: int, verbose: bool) -> int:
     else:
         print("\n  No draft failed any check.")
 
+    # A caption has to read the run it is printed under. The first live run of
+    # this script returned 30 fallbacks under "the system working" while every
+    # call was 400ing on a missing workspace header — the model was never
+    # reached, and the report said the system was fine. That is the same defect
+    # as the +100% incident: prose that describes the expected run rather than
+    # the actual one.
+    if drafter_errors:
+        print("\n  The drafter raised rather than answering:")
+        for detail, count in drafter_errors.most_common(3):
+            print(f"    {count:>3}×  {detail[:150]}")
+
+    unreachable = sum(drafter_errors.values())
+    if unreachable == len(cases):
+        print(
+            "\n  THE MODEL WAS NEVER REACHED. Every call raised, so this run "
+            "measures\n  nothing about the model — only that the fallback held "
+            "when it was gone.\n  Fix the error above and run again.\n"
+        )
+        return 2
+    if unreachable:
+        print(
+            f"\n  {unreachable} of {len(cases)} calls never reached the model. "
+            "Those are outages,\n  not drafting failures, and the columns above "
+            "understate the model.\n"
+        )
     print(
         "\n  'fell back' is not a failure of the system — it is the system "
         "working.\n  Nothing in the 'fell back' column reached a customer "

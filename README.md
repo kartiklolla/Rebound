@@ -478,32 +478,55 @@ nothing by hand: they sample a population, take the debits that actually failed,
 through a real compliance gate, and compose from the resulting approval. That is how the two
 worst defects in this layer were found.
 
-**Run live against `claude-sonnet-5`**, 30 briefs — three languages × ten
-ask/channel/rail combinations, one call each plus one repair where the first draft failed:
+**Run live against `claude-sonnet-5`.** The brief set is three languages × ten
+ask/channel/rail combinations, one call each plus one repair where the first draft failed.
+Pooled over 150 briefs, 50 per language:
 
 | Language | First draft | Repaired | Fell back | Blocked |
 |---|---:|---:|---:|---:|
-| English | 10 | 0 | 0 | 0 |
-| Hinglish | 8 | 2 | 0 | 0 |
-| Hindi | 4 | 2 | **4** | 0 |
+| Hinglish | 39 | 11 | **0** (0%) | 0 |
+| English | 48 | 0 | **2** (4%) | 0 |
+| Hindi | 21 | 8 | **21** (42%) | 0 |
+| **All** | **108** | **19** | **23** (15%) | **0** |
 
-**26 of 30 messages were written by the model; 4 were not good enough and a template went
-out instead.** Nothing unverified was sent, and nothing was blocked outright — every brief
+**127 of 150 messages were written by the model; 23 were not good enough and a template went
+out instead.** Nothing unverified was sent and nothing was blocked outright — every brief
 produced a sendable message by one route or the other.
 
-**Hindi is where the model struggles**, and it fails in the direction the design predicted.
-The checks tripped across all attempts:
+**Three findings, in descending order of how much they cost to learn.**
+
+*Hinglish never falls back, but needs repair most often* — 11 of 50 first drafts failed and
+every one of them recovered on the repair pass. Hinglish is the register the argument for
+using a model at all rests on, and it is the one the model handles best. It is also the case
+that most justifies the repair step: without it, Hinglish would fall back 22% of the time
+instead of never.
+
+*Hindi fails 42% of the time*, in the direction the design predicted. Devanagari costs more
+than twice the per-segment budget, so a Hindi draft has the least room and the most ways to
+overrun it — which is exactly the case the fallback exists for.
+
+*English is not 100%.* An earlier version of this section reported it as such on the strength
+of twenty briefs across two runs, both of which happened to return zero English fallbacks. At
+fifty it is 2. The claim was not wrong by much and it was wrong in the flattering direction,
+from too small a sample, published as a fixed figure — the same defect as every other stale
+number this README has had to correct, committed while writing up the run that was supposed
+to demonstrate the project's care about exactly this.
+
+The checks tripped, pooled across all attempts:
 
 ```
-script_matches_language  12     within_channel_budget  11     pre_debit_disclosure  3
-amount_is_exact          11     ask_is_honoured         8     renders_on_channel    2
-sender_is_identified     11
+sender_is_identified  37     script_matches_language  33     pre_debit_disclosure  6
+amount_is_exact       36     ask_is_honoured          30     renders_on_channel    1
+within_channel_budget 36                                     links_are_ours        1
 ```
 
-Devanagari costs more than twice the per-segment budget, so a Hindi draft has the least room
-and the most ways to overrun it — which is exactly the case the fallback exists for. The
-fallback rate is therefore a measurement, not an embarrassment: it says the model is trusted
-for 100% of English, 100% of Hinglish, and 60% of Hindi.
+That last one is worth its own sentence. `links_are_ours` is the check that was once passing
+3/3 while a phishing host went out; here it fired on a URL a real model actually produced,
+rather than one written to trip it.
+
+The fallback rate is therefore a measurement, not an embarrassment. It says how far the model
+is trusted, per language, with a denominator attached — and the denominator is the part that
+took three runs to get right.
 
 **A first attempt returned 30 fallbacks and a summary reading "the system working."** The key
 was identity-linked; the SDK does not read a workspace id from the environment, so every call
