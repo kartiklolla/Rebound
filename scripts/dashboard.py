@@ -29,10 +29,13 @@ supposed to agree and did not.
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime as dt
 import http.server
 import json
+import math
 import socketserver
+import statistics
 import sys
 import webbrowser
 from collections import Counter
@@ -137,12 +140,15 @@ def build(episodes: int, customers: int, seed: int) -> dict:
     print(f"Running {len(batch):,} episodes through every policy …", flush=True)
     policies = _policies(world, batch, pricer)
     return {
-        "generated_at": dt.datetime.now().strftime("%d %b %Y, %H:%M"),
+        # No build timestamp. It changes on every rebuild, changes the reading
+        # of nothing on the page, and a field carried in the payload for no
+        # consumer is a field that will eventually get rendered.
         "merchant": MERCHANT.signature,
         "support": MERCHANT.support_number,
         "episodes": len(batch),
         "accounts": accounts,
         "policies": policies,
+        "holdout": _holdout(),
         "grading": _grading(pricer),
         "requests": _request_totals(accounts),
     }
@@ -408,6 +414,111 @@ def _policies(world: World, batch, pricer) -> dict:
         ],
         "unrecovered": len(ours.exceptions),
         "audit": audit,
+        # From the whole audit, not the 1,200 the replay is capped at - a chart
+        # that stopped mid-campaign would understate the run it is drawn from.
+        "candles": _candles(ours.audit),
+    }
+
+
+def _candles(events) -> list[dict]:
+    """Daily OHLC of the running net position, from the audit trail.
+
+    A candlestick needs something that genuinely moves both ways inside a
+    bucket, or every candle is a hollow box with no wicks and the chart is
+    decoration. Cumulative *recovered* is monotonic and would do exactly that.
+    The running net - recovered minus spent - is not: a presentation that fails
+    costs money and returns none, so a bad day closes below where it opened.
+
+    Open is the previous day's close rather than the first event of the day, so
+    the series is continuous and a flat stretch means a quiet day rather than a
+    rendering artefact.
+    """
+    by_day: dict[dt.date, list[float]] = {}
+    running = 0.0
+    for e in sorted(events, key=lambda x: x.at):
+        running += (e.recovered_paise - e.cost_paise) / 100
+        by_day.setdefault(e.at.date(), []).append(running)
+
+    candles, previous_close = [], 0.0
+    for day in sorted(by_day):
+        path = by_day[day]
+        candles.append(
+            {
+                "date": day.isoformat(),
+                "label": day.strftime("%d %b"),
+                "open": round(previous_close),
+                "high": round(max([previous_close] + path)),
+                "low": round(min([previous_close] + path)),
+                "close": round(path[-1]),
+                "events": len(path),
+            }
+        )
+        previous_close = path[-1]
+    return candles
+
+
+def _holdout() -> dict | None:
+    """The twenty-seed Claim B result, if it has been run.
+
+    Read from the CSV rather than restated here, so this panel cannot drift
+    from what ``scripts/holdout.py`` produced - the failure this project has hit
+    more than any other. No file, no panel: a dashboard that invents a headline
+    when the run is missing is worse than one that admits it is missing.
+    """
+    path = Path(__file__).resolve().parent.parent / "holdout20.csv"
+    if not path.exists():
+        return None
+    with path.open() as handle:
+        rows = list(csv.DictReader(handle))
+    if not rows:
+        return None
+
+    by_policy: dict[str, list[float]] = {}
+    for row in rows:
+        by_policy.setdefault(row["policy"], []).append(float(row["gap_vs_ladder"]))
+    ours = by_policy.get("rebound_sequencer", [])
+    if len(ours) < 2:
+        return None
+
+    mean, sd, n = statistics.fmean(ours), statistics.stdev(ours), len(ours)
+    t = mean / (sd / math.sqrt(n))
+    try:
+        from scipy import stats
+
+        p = float(2 * stats.t.sf(abs(t), n - 1))
+    except ImportError:
+        p = None
+    return {
+        "seeds": n,
+        "mean": round(mean),
+        "sd": round(sd),
+        "won": sum(1 for g in ours if g > 0),
+        "t": round(t, 3),
+        "df": n - 1,
+        "p": p,
+        "policies": sorted(
+            (
+                {
+                    "policy": name,
+                    "mean_gap": round(statistics.fmean(gaps)),
+                    "min_gap": round(min(gaps)),
+                    "max_gap": round(max(gaps)),
+                    "won": sum(1 for g in gaps if g > 0),
+                }
+                for name, gaps in by_policy.items()
+            ),
+            key=lambda r: r["mean_gap"],
+            reverse=True,
+        ),
+        "per_seed": sorted(
+            (
+                {"seed": row["seed"], "group": row.get("group", ""),
+                 "gap": round(float(row["gap_vs_ladder"]))}
+                for row in rows
+                if row["policy"] == "rebound_sequencer"
+            ),
+            key=lambda r: r["gap"],
+        ),
     }
 
 

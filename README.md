@@ -578,15 +578,40 @@ fallback failed — meaning nothing would have been sent at all.
 uv run python scripts/dashboard.py --seed 20260904
 ```
 
-Three views. **Live run** replays a recorded rollout action by action at 1× / 4× / 16×, with
-recovered, spent, revocations and net accumulating from the audit trail — a replay, not live
-computation, and labelled as one. **Requests** lists customer requests; opening one shows the
-four stages (classify → price → adjudicate → act), the rules that fired, and the expected
-value decomposed line by line rather than asserted. **Batch** carries the policy table,
-outcome breakdown and exception reasons.
+Five views.
+
+**Overview** — a candlestick of the running net position, day by day, over the campaign the
+page was built from. Scroll to zoom, drag to pan, hover for the day's open/high/low/close.
+The series is *recovered minus spent*, not cumulative recovered: cumulative recovered is
+monotonic, so every candle would be a wickless box, and a chart shaped like evidence that
+contains none is worse than no chart. A presentation that fails costs a gateway fee and
+returns nothing, so a bad day genuinely closes below where it opened.
+
+**Live run** replays a recorded rollout action by action at 1× / 4× / 16×, with recovered,
+spent, revocations and net accumulating from the audit trail — a replay, not live computation,
+and labelled as one.
+
+**Requests** lists customer requests; opening one shows the four stages (classify → price →
+adjudicate → act), the rules that fired, and the expected value decomposed line by line rather
+than asserted.
+
+**Comparison** reads `holdout20.csv` directly and carries the measured claim: every policy
+against the fixed ladder over twenty held-out seeds at full scale, a bar per seed with the one
+loss rendered rather than dropped, and the four-row history of how the number was reached.
+
+**This batch** is the single reduced-scale run the rest of the page is built from — policy
+table, outcome breakdown, exception reasons.
+
+**Every view states its own scope, and the two scopes are kept apart.** Overview, Live run and
+Requests describe one seed at reduced scale, where the sequencer is *behind* the ladder on net
+while recovering more; Comparison describes twenty seeds at full scale, where it is ahead. An
+earlier version of this page put the twenty-seed gap in the single-seed summary row, where a
+reader would have taken it as describing the numbers beside it — which on that seed carry the
+opposite sign.
 
 Nothing in that page recomputes a decision — a second implementation in JavaScript would be a
-second thing to keep in agreement.
+second thing to keep in agreement. The comparison figures are parsed from the CSV
+`scripts/holdout.py` wrote rather than restated in the page, for the same reason.
 
 **Pass the seed.** The builder's default does not contain every case worth showing;
 `--seed 20260904` does, and the build prints a coverage report naming which cases the chosen

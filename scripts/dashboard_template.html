@@ -2,462 +2,554 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Rebound · Recovery console</title>
 <style>
+*,*::before,*::after{box-sizing:border-box}
 :root{
-  --bg:#0b0f19; --panel:#121826; --panel2:#171f30; --line:#222c40; --line2:#1a2333;
-  --ink:#eef2f8; --body:#a8b3c7; --mute:#6e7a91;
-  --blue:#4c8dff; --blue-dim:rgba(76,141,255,.14);
-  --ok:#2ecc71; --ok-dim:rgba(46,204,113,.13);
-  --warn:#f5b13d; --warn-dim:rgba(245,177,61,.13);
-  --bad:#ff6b5e; --bad-dim:rgba(255,107,94,.13);
-  --r:10px;
+  --bg:#eef1f8; --surface:#fff; --surface-2:#f8fafc;
+  --ink:#111428; --ink-2:#3b4066; --muted:#767ca0; --line:#e4e8f3;
+  --brand:#4f46e5; --brand-2:#8b5cf6; --brand-soft:#eef0fe;
+  --up:#0ea472; --up-soft:#e6f7f1; --down:#e11d48; --down-soft:#fdeaef;
+  --warn:#c2740a; --warn-soft:#fdf3e3;
+  --r:14px; --shadow:0 1px 2px rgba(17,20,40,.04),0 8px 24px -12px rgba(17,20,40,.14);
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
 }
-*{box-sizing:border-box}
 html,body{margin:0;padding:0}
 body{background:var(--bg);color:var(--ink);
-  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",
-    Arial,"Noto Sans",sans-serif;
-  font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
-.num,.mono{font-family:"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",
-  monospace;font-variant-numeric:tabular-nums}
-h1,h2,h3{margin:0;font-weight:600;letter-spacing:-.01em}
-.hide{display:none!important}
-button{font-family:inherit}
+  font:400 14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",Arial,"Noto Sans",sans-serif;
+  -webkit-font-smoothing:antialiased}
+.shell{display:grid;grid-template-columns:232px 1fr;min-height:100vh}
 
-/* ---------- shell ---------- */
-header{border-bottom:1px solid var(--line);background:var(--panel);
-  position:sticky;top:0;z-index:30}
-.bar{max-width:1240px;margin:0 auto;padding:0 22px;height:56px;
-  display:flex;align-items:center;gap:28px}
-.logo{display:flex;align-items:center;gap:9px;font-weight:650;font-size:16px}
-.logo i{width:24px;height:24px;border-radius:6px;background:var(--blue);
-  display:grid;place-items:center;font-style:normal;font-size:13px;
-  font-weight:800;color:#07101f}
-nav{display:flex;gap:3px}
-nav button{all:unset;padding:7px 14px;border-radius:7px;cursor:pointer;
-  color:var(--body);font-size:13.5px;font-weight:520}
-nav button:hover{color:var(--ink);background:var(--panel2)}
-nav button[aria-current]{background:var(--blue-dim);color:var(--blue)}
-.badge{margin-left:auto;color:var(--mute);font-size:12px}
-main{max-width:1240px;margin:0 auto;padding:22px}
+.side{background:linear-gradient(168deg,#3b32c9 0%,#4f46e5 42%,#7c3aed 100%);
+  color:#fff;padding:26px 0 20px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column}
+.brand{display:flex;align-items:center;gap:10px;padding:0 24px 30px;font-size:19px;font-weight:700;letter-spacing:-.3px}
+.brand i{width:22px;height:22px;border-radius:7px;background:#fff;position:relative;flex:0 0 auto}
+.brand i::after{content:"";position:absolute;top:6px;right:6px;width:9px;height:9px;border-radius:50%;background:var(--brand-2)}
+.nav{display:flex;flex-direction:column;gap:2px;padding:0 12px}
+.nav button{all:unset;display:flex;align-items:center;gap:11px;padding:11px 14px;border-radius:10px;
+  color:rgba(255,255,255,.76);font-size:14px;cursor:pointer;transition:.15s}
+.nav button:hover{background:rgba(255,255,255,.1);color:#fff}
+.nav button[aria-current="true"]{background:#fff;color:var(--brand);font-weight:600}
+.nav svg{width:17px;height:17px;flex:0 0 auto}
+.side-foot{margin-top:auto;padding:18px 24px 0;font-size:11.5px;line-height:1.6;
+  color:rgba(255,255,255,.62);border-top:1px solid rgba(255,255,255,.16)}
 
-/* ---------- tiles ---------- */
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
-.tile{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
-  padding:14px 16px}
-.tile .k{color:var(--mute);font-size:11px;text-transform:uppercase;
-  letter-spacing:.07em;font-weight:600}
-.tile .v{font-size:26px;font-weight:650;margin-top:5px;letter-spacing:-.02em}
-.tile .d{color:var(--mute);font-size:12px;margin-top:2px}
-.tile.up .v{color:var(--ok)} .tile.down .v{color:var(--bad)}
+.main{min-width:0;display:flex;flex-direction:column}
+.top{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:18px 34px;
+  background:var(--surface);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
+.top h1{margin:0;font-size:21px;font-weight:700;letter-spacing:-.4px}
+.who{color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums}
+.wrap{padding:26px 34px 60px;max-width:1560px;width:100%}
+.view{display:none}.view.on{display:block}
 
-/* ---------- run ---------- */
-.runbar{display:flex;align-items:center;gap:14px;background:var(--panel);
-  border:1px solid var(--line);border-radius:var(--r);padding:12px 16px;
-  margin-bottom:14px}
-.play{all:unset;display:flex;align-items:center;gap:9px;cursor:pointer;
-  background:var(--blue);color:#07101f;font-weight:650;font-size:13.5px;
-  padding:9px 18px;border-radius:8px}
-.play:hover{filter:brightness(1.08)}
-.play.stop{background:var(--panel2);color:var(--ink);
-  box-shadow:inset 0 0 0 1px var(--line)}
-.speeds{display:flex;gap:2px;background:var(--panel2);padding:3px;border-radius:7px}
-.speeds button{all:unset;padding:5px 11px;border-radius:5px;cursor:pointer;
-  color:var(--mute);font-size:12.5px}
-.speeds button[aria-pressed="true"]{background:var(--blue-dim);color:var(--blue)}
-.progress{flex:1;height:5px;background:var(--panel2);border-radius:99px;
-  overflow:hidden;min-width:90px}
-.progress i{display:block;height:100%;background:var(--blue);width:0;
-  transition:width .12s linear}
-.runbar .pos{color:var(--mute);font-size:12.5px;min-width:104px;text-align:right}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
+.card>header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:17px 20px;border-bottom:1px solid var(--line)}
+.card>header h2{margin:0;font-size:14.5px;font-weight:650;letter-spacing:-.15px}
+.card>header .hint{color:var(--muted);font-size:12px;font-weight:400;margin-top:2px}
+.pad{padding:20px}
+.grid{display:grid;gap:18px}
+.stats{grid-template-columns:repeat(auto-fit,minmax(190px,1fr));margin-bottom:18px}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:17px 19px;
+  box-shadow:var(--shadow);position:relative;overflow:hidden}
+.stat::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--brand)}
+.stat.up::before{background:var(--up)}.stat.down::before{background:var(--down)}
+.stat .k{color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.7px;font-weight:600}
+.stat .v{font-size:27px;font-weight:700;letter-spacing:-1px;margin:7px 0 3px;font-variant-numeric:tabular-nums}
+.stat .d{font-size:12px;color:var(--ink-2)}
+.stat .d b{font-weight:650}
 
-.feed{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
-  height:420px;overflow:hidden;position:relative}
-.feed .rows{position:absolute;inset:0;overflow-y:auto;padding:4px 0}
-.ev{display:flex;align-items:center;gap:12px;padding:9px 16px;
-  border-bottom:1px solid var(--line2);font-size:13px;
-  animation:in .18s ease-out}
-@keyframes in{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}
-.ev .ep{color:var(--mute);width:104px;flex:none}
-.ev .ac{width:190px;flex:none;font-weight:520}
-.ev .rs{color:var(--body);flex:1;min-width:0;overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap}
-.ev .mo{width:96px;text-align:right;flex:none}
-.dot{width:7px;height:7px;border-radius:50%;flex:none}
-.d-ok{background:var(--ok)} .d-bad{background:var(--bad)} .d-mid{background:var(--mute)}
-.empty{position:absolute;inset:0;display:grid;place-items:center;
-  color:var(--mute);font-size:13.5px;text-align:center;padding:20px}
+.ctrls{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.btn{all:unset;cursor:pointer;padding:6px 11px;border-radius:8px;border:1px solid var(--line);
+  font-size:12.5px;font-weight:550;color:var(--ink-2);background:var(--surface-2);transition:.14s}
+.btn:hover{border-color:var(--brand);color:var(--brand);background:var(--brand-soft)}
+.btn[aria-pressed="true"]{background:var(--brand);border-color:var(--brand);color:#fff}
+.chartbox{position:relative;width:100%}
+svg.chart{display:block;width:100%;touch-action:none;cursor:crosshair}
+.tip{position:absolute;pointer-events:none;opacity:0;transition:opacity .12s;background:#111428;color:#fff;
+  border-radius:10px;padding:10px 12px;font-size:12px;box-shadow:0 10px 30px -8px rgba(0,0,0,.5);
+  white-space:nowrap;z-index:5;line-height:1.6}
+.tip b{font-weight:650}
+.tip .r{display:flex;justify-content:space-between;gap:18px}
+.tip .r span:last-child{font-variant-numeric:tabular-nums;font-family:var(--mono)}
+.legend{display:flex;gap:16px;flex-wrap:wrap;color:var(--muted);font-size:12px;align-items:center}
+.legend i{width:9px;height:9px;border-radius:3px;display:inline-block;margin-right:6px;vertical-align:-1px}
 
-/* ---------- list + detail ---------- */
-.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
-@media(max-width:1000px){.split{grid-template-columns:1fr}}
-.list{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
-  overflow:hidden}
-.lrow{all:unset;display:flex;align-items:center;gap:12px;width:100%;
-  padding:12px 16px;cursor:pointer;border-bottom:1px solid var(--line2);
-  box-sizing:border-box}
-.lrow:hover{background:var(--panel2)}
-.lrow[aria-selected="true"]{background:var(--blue-dim);
-  box-shadow:inset 2px 0 0 var(--blue)}
-.lrow .who{width:112px;flex:none;font-weight:550}
-.lrow .what{flex:1;color:var(--body);min-width:0;overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap}
-.lrow .ev{padding:0;border:0;width:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;
+  letter-spacing:.6px;padding:0 14px 10px;border-bottom:1px solid var(--line)}
+td{padding:12px 14px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;vertical-align:top}
+tr:last-child td{border-bottom:0}
+tbody tr.us{background:var(--brand-soft)}
+tbody tr.us td{font-weight:600}
+td.num,th.num{text-align:right}
+.pos{color:var(--up);font-weight:650}.neg{color:var(--down);font-weight:650}
+.bar{height:7px;border-radius:4px;background:var(--line);overflow:hidden;min-width:70px;margin-top:5px}
+.bar>i{display:block;height:100%;border-radius:4px}
 
-.pill{display:inline-flex;align-items:center;padding:3px 9px;border-radius:99px;
-  font-size:11.5px;font-weight:620;white-space:nowrap}
-.p-done{background:var(--ok-dim);color:var(--ok)}
-.p-scheduled{background:var(--warn-dim);color:var(--warn)}
-.p-declined{background:var(--bad-dim);color:var(--bad)}
-.p-honoured{background:var(--blue-dim);color:var(--blue)}
-.p-reg{background:var(--bad-dim);color:var(--bad)}
-.p-pol{background:rgba(168,179,199,.13);color:var(--body)}
+.split{display:grid;grid-template-columns:352px 1fr;gap:18px;align-items:start}
+.rlist{max-height:74vh;overflow:auto}
+.row{display:flex;gap:12px;align-items:center;padding:13px 18px;border-bottom:1px solid var(--line);cursor:pointer;transition:.13s}
+.row:hover{background:var(--surface-2)}
+.row[aria-selected="true"]{background:var(--brand-soft);box-shadow:inset 3px 0 0 var(--brand)}
+.row .nm{font-weight:600;font-size:13.5px}
+.row .as{color:var(--muted);font-size:12px;margin-top:1px}
+.dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+.chip{display:inline-block;padding:3px 9px;border-radius:6px;font-size:11px;font-weight:650;letter-spacing:.2px;white-space:nowrap}
+.chip.ok{background:var(--up-soft);color:var(--up)}.chip.no{background:var(--down-soft);color:var(--down)}
+.chip.wait{background:var(--warn-soft);color:var(--warn)}.chip.neutral{background:var(--surface-2);color:var(--muted)}
+.pipe{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}
+.stage{border:1px solid var(--line);border-radius:11px;padding:13px 15px;background:var(--surface-2);
+  opacity:.32;transform:translateY(5px);transition:.36s}
+.stage.on{opacity:1;transform:none}
+.stage .s{font-size:10.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);font-weight:650}
+.stage .t{font-weight:650;margin-top:5px;font-size:13.5px}
+.stage .b{color:var(--ink-2);font-size:12px;margin-top:3px}
+.stage.good{background:var(--up-soft);border-color:#b9e8d5}
+.stage.bad{background:var(--down-soft);border-color:#f7c6d2}
+.stage.hold{background:var(--warn-soft);border-color:#f3ddb4}
+.ev{font-family:var(--mono);font-size:12.5px}
+.ev .l{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--line)}
+.ev .l.tot{border-bottom:0;border-top:2px solid var(--ink);margin-top:5px;padding-top:9px;font-weight:700}
+.msg{background:var(--surface-2);border:1px solid var(--line);border-left:3px solid var(--brand);
+  border-radius:9px;padding:13px 15px;font-size:13px;line-height:1.65}
 
-.detail{background:var(--panel);border:1px solid var(--line);
-  border-radius:var(--r);padding:18px;position:sticky;top:78px}
-.dhead{display:flex;align-items:center;gap:11px;margin-bottom:4px}
-.dhead h2{font-size:16px}
-.dsub{color:var(--mute);font-size:12.5px;margin-bottom:16px}
-
-/* ---------- pipeline ---------- */
-.stage{display:flex;gap:12px;padding:11px 0;border-top:1px solid var(--line2);
-  opacity:0;transform:translateX(-6px);animation:slide .22s ease-out forwards}
-@keyframes slide{to{opacity:1;transform:none}}
-.stage .n{width:22px;height:22px;border-radius:50%;flex:none;display:grid;
-  place-items:center;font-size:11px;font-weight:700;background:var(--panel2);
-  color:var(--mute)}
-.stage.pass .n{background:var(--ok-dim);color:var(--ok)}
-.stage.fail .n{background:var(--bad-dim);color:var(--bad)}
-.stage.hold .n{background:var(--warn-dim);color:var(--warn)}
-.stage .t{flex:1;min-width:0}
-.stage .h{font-weight:560;font-size:13.5px;display:flex;gap:9px;
-  align-items:center;justify-content:space-between}
-.stage .b{color:var(--mute);font-size:12.5px;margin-top:2px}
-.stage .val{font-size:13px}
-
-.kv{display:grid;grid-template-columns:1fr auto;gap:6px 18px;font-size:13px;
-  margin-top:10px}
-.kv dt{color:var(--body)} .kv dd{margin:0;text-align:right}
-.kv .tot{border-top:1px solid var(--line);padding-top:7px;margin-top:3px;
-  font-weight:650}
-.pos{color:var(--ok)} .neg{color:var(--bad)}
-
-table{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:9px}
-th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line2)}
-th{color:var(--mute);font-size:10.5px;text-transform:uppercase;
-  letter-spacing:.06em;font-weight:650}
-tr:last-child td{border-bottom:none}
-tr.bind{background:var(--blue-dim)}
-.tw{border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-top:9px}
-.tw table{margin:0}
-.tw th{background:var(--panel2)}
-
-.sms{background:#0d1420;border:1px solid var(--line);border-radius:9px;
-  padding:12px 14px;margin-top:9px}
-.sms .t{font-size:13px;line-height:1.5}
-.sms .m{color:var(--mute);font-size:11px;margin-top:7px}
-
-h3.sec{font-size:11px;color:var(--mute);text-transform:uppercase;
-  letter-spacing:.07em;margin:20px 0 8px;font-weight:650}
-.note{color:var(--mute);font-size:12px;margin:9px 0 0}
-.split2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-@media(max-width:900px){.split2{grid-template-columns:1fr}}
-.card{background:var(--panel);border:1px solid var(--line);
-  border-radius:var(--r);padding:16px}
-.bars{display:flex;height:9px;border-radius:5px;overflow:hidden;margin:2px 0 9px}
-.leg{display:flex;gap:15px;flex-wrap:wrap;font-size:12.5px;color:var(--body)}
-.leg b{color:var(--ink)}
-.sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px}
-footer{max-width:1240px;margin:0 auto;padding:26px 22px 50px;color:var(--mute);
-  font-size:12px}
+.feed{height:340px;overflow:auto;font-size:12.5px}
+.fr{display:grid;grid-template-columns:74px 1fr auto;gap:12px;padding:8px 18px;border-bottom:1px solid var(--line);animation:in .3s}
+@keyframes in{from{opacity:0;transform:translateY(-5px)}to{opacity:1}}
+.fr .t{color:var(--muted);font-family:var(--mono);font-size:11.5px}
+.fr .a{font-weight:600}
+.fr .why{color:var(--muted);font-size:11.5px}
+.fr .m{font-family:var(--mono);font-weight:650;text-align:right;font-variant-numeric:tabular-nums}
+.prog{height:5px;background:var(--line);border-radius:3px;overflow:hidden}
+.prog>i{display:block;height:100%;background:linear-gradient(90deg,var(--brand),var(--brand-2));width:0;transition:width .2s linear}
+.note{color:var(--muted);font-size:12.5px;line-height:1.6}
+.warnbox{background:var(--warn-soft);border:1px solid #f3ddb4;border-radius:10px;padding:13px 15px;
+  font-size:12.5px;line-height:1.65;color:#6b4708}
+h3.sec{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin:0 0 11px;font-weight:650}
+code{font-family:var(--mono);font-size:12px;background:var(--surface-2);padding:1px 5px;border-radius:4px}
+@media(max-width:1100px){.shell{grid-template-columns:1fr}.side{position:static;height:auto}.split{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
-
-<header><div class="bar">
-  <div class="logo"><i>R</i> Rebound</div>
-  <nav>
-    <button aria-current data-v="run">Live run</button>
-    <button data-v="requests">Requests</button>
-    <button data-v="batch">Batch</button>
-  </nav>
-  <span class="badge" id="badge"></span>
-</div></header>
-
-<main>
-  <section id="run">
-    <div class="tiles" id="runTiles"></div>
-    <div style="height:14px"></div>
-    <div class="runbar">
-      <button class="play" id="play">▶ Run batch</button>
-      <div class="speeds" id="speeds">
-        <button data-s="60" aria-pressed="true">1×</button>
-        <button data-s="20">4×</button>
-        <button data-s="6">16×</button>
-      </div>
-      <div class="progress"><i id="bar"></i></div>
-      <span class="pos" id="pos"></span>
+<div class="shell">
+  <aside class="side">
+    <div class="brand"><i></i>Rebound</div>
+    <nav class="nav" id="nav"></nav>
+  </aside>
+  <div class="main">
+    <header class="top">
+      <h1 id="vtitle">Overview</h1>
+      <div class="who" id="scope"></div>
+    </header>
+    <div class="wrap">
+      <section class="view on" id="v-overview"></section>
+      <section class="view" id="v-live"></section>
+      <section class="view" id="v-requests"></section>
+      <section class="view" id="v-compare"></section>
+      <section class="view" id="v-batch"></section>
     </div>
-    <div class="feed"><div class="rows" id="feed"></div>
-      <div class="empty" id="feedEmpty">Press <b style="color:var(--blue)">Run
-        batch</b> to replay the recorded rollout, action by action.</div></div>
-    <p class="note">Replay of a recorded run — the same audit trail the batch
-      table is built from. Nothing is recomputed here.</p>
-  </section>
-
-  <section id="requests" class="hide">
-    <div class="split">
-      <div class="list" id="reqList"></div>
-      <div class="detail" id="reqDetail"></div>
-    </div>
-  </section>
-
-  <section id="batch" class="hide">
-    <div class="tiles" id="batchTiles"></div>
-    <div style="height:16px"></div>
-    <div class="tw"><table id="polTable"></table></div>
-    <p class="note" id="polNote"></p>
-    <div style="height:16px"></div>
-    <div class="split2">
-      <div class="card">
-        <h3 class="sec" style="margin-top:0">Request outcomes</h3>
-        <div id="outcomes"></div>
-      </div>
-      <div class="card">
-        <h3 class="sec" style="margin-top:0">Unrecovered, by reason</h3>
-        <div class="tw" style="margin-top:0"><table id="excTable"></table></div>
-      </div>
-    </div>
-    <h3 class="sec">How an action is graded</h3>
-    <div class="card">
-      <div class="mono" style="background:#0d1420;border:1px solid var(--line);
-        border-radius:8px;padding:12px;font-size:12.5px;overflow-x:auto"
-        id="formula"></div>
-      <div class="tw"><table id="termTable"></table></div>
-    </div>
-  </section>
-</main>
-
-<footer id="foot"></footer>
+  </div>
+</div>
 
 <script>
-const D = /*__DATA__*/null;
-const $=(s,r=document)=>r.querySelector(s);
-const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const inr=n=>(n<0?'−₹':'₹')+Math.abs(Math.round(n)).toLocaleString('en-IN');
-const inr2=n=>(n<0?'−₹':'₹')+Math.abs(n).toLocaleString('en-IN',{maximumFractionDigits:2});
-const pct=n=>(n*100).toFixed(1)+'%';
+const DATA = /*__DATA__*/null;
+const $ = h => { const t=document.createElement('template'); t.innerHTML=h.trim(); return t.content.firstChild; };
+const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const inr = n => (n<0?'−':'')+'₹'+Math.abs(Math.round(n)).toLocaleString('en-IN');
+const sgn = n => (n>0?'+':n<0?'−':'')+'₹'+Math.abs(Math.round(n)).toLocaleString('en-IN');
+const pct = (x,d=1) => (x*100).toFixed(d)+'%';
+const NAMES={rebound_sequencer:'Rebound',fixed_ladder:'Fixed ladder',immediate_retry:'Immediate retry',
+  disposition_rules:'Disposition rules',aggressive_contact:'Aggressive contact',no_recovery:'Do nothing',
+  rebound_sequencer_no_contact:'Rebound (no contact)'};
+const nm = p => NAMES[p]||p;
 
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
-  document.querySelectorAll('nav button').forEach(x=>x.removeAttribute('aria-current'));
-  b.setAttribute('aria-current','');
-  ['run','requests','batch'].forEach(v=>$('#'+v).classList.toggle('hide',v!==b.dataset.v));
-  window.scrollTo(0,0);
+const P=DATA.policies, ROWS=P.rows;
+const US=ROWS.find(r=>r.policy==='rebound_sequencer'), LAD=ROWS.find(r=>r.policy==='fixed_ladder');
+const HO=DATA.holdout;
+/* The topbar carries the scope of the numbers below it and nothing else. Who
+   is notionally logged in, and when the page was built, change no reading of
+   any figure on it. */
+const SCOPE={overview:DATA.episodes.toLocaleString('en-IN')+' episodes · 1 seed',
+  live:DATA.episodes.toLocaleString('en-IN')+' episodes · 1 seed',
+  requests:DATA.accounts.length+' accounts',
+  compare:HO?HO.seeds+' held-out seeds · full scale':'',
+  batch:DATA.episodes.toLocaleString('en-IN')+' episodes · 1 seed'};
+
+const ICONS={overview:'<path d="M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 9h8V3h-8z"/>',
+  live:'<path d="M3 12h4l3 8 4-16 3 8h4"/>',requests:'<path d="M4 6h16M4 12h16M4 18h10"/>',
+  compare:'<path d="M4 20V10M10 20V4M16 20v-7M22 20V7"/>',batch:'<path d="M3 5h18v14H3zM3 10h18M9 10v9"/>'};
+const VIEWS=[['overview','Overview'],['live','Live run'],['requests','Requests'],
+  ['compare','Comparison'],['batch','This batch']];
+const nav=document.getElementById('nav');
+VIEWS.forEach(([id,label])=>{
+  const b=$(`<button data-v="${id}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${ICONS[id]}</svg>${label}</button>`);
+  b.onclick=()=>go(id); nav.append(b);
 });
-
-/* ================= live run ================= */
-const AUDIT=D.policies.audit;
-let i=0,timer=null,delay=60,acc={rec:0,spent:0,eps:new Set(),won:new Set(),lost:0};
-
-function tiles(el,items){el.innerHTML=items.map(([k,v,d,c])=>
-  `<div class="tile ${c||''}"><div class="k">${k}</div>
-   <div class="v num">${v}</div><div class="d">${esc(d)}</div></div>`).join('')}
-
-function paintRun(){
-  const net=acc.rec-acc.spent;
-  tiles($('#runTiles'),[
-    ['Episodes',acc.eps.size.toLocaleString('en-IN'),'of '+D.episodes.toLocaleString('en-IN')],
-    ['Recovered',inr(acc.rec),acc.won.size+' collected'],
-    ['Spent',inr(acc.spent),'fees and messages'],
-    ['Revocations',acc.lost,'mandates lost'],
-    ['Net',inr(net),'recovered less spent',net>=0?'up':'down'],
-  ]);
-  $('#bar').style.width=(i/AUDIT.length*100)+'%';
-  $('#pos').textContent=i+' / '+AUDIT.length+' actions';
+function go(id){
+  VIEWS.forEach(([v])=>{
+    document.getElementById('v-'+v).classList.toggle('on',v===id);
+    nav.querySelector('[data-v="'+v+'"]').setAttribute('aria-current',v===id);
+  });
+  document.getElementById('vtitle').textContent=VIEWS.find(v=>v[0]===id)[1];
+  document.getElementById('scope').textContent=SCOPE[id]||'';
 }
 
-function step(){
-  if(i>=AUDIT.length){stop();return}
-  const e=AUDIT[i++];
-  acc.eps.add(e.episode); acc.spent+=e.cost; acc.rec+=e.recovered;
-  if(e.succeeded)acc.won.add(e.episode); if(e.revoked)acc.lost++;
-  const cls=e.succeeded?'d-ok':e.revoked?'d-bad':'d-mid';
-  const row=document.createElement('div');
-  row.className='ev';
-  row.innerHTML=`<span class="dot ${cls}"></span>
-    <span class="ep mono">${esc(e.episode.slice(3,11))}</span>
-    <span class="ac mono">${esc(e.action)}</span>
-    <span class="rs">${esc(e.detail)}</span>
-    <span class="mo num ${e.recovered?'pos':''}">${e.recovered?inr(e.recovered):
-      '−'+inr2(e.cost).replace('₹','₹')}</span>`;
-  const feed=$('#feed');
-  feed.prepend(row);
-  while(feed.childElementCount>90)feed.lastElementChild.remove();
-  paintRun();
-}
-function play(){$('#feedEmpty').style.display='none';
-  $('#play').textContent='❚❚ Pause';$('#play').classList.add('stop');
-  timer=setInterval(step,delay)}
-function stop(){clearInterval(timer);timer=null;
-  $('#play').textContent=i>=AUDIT.length?'↻ Replay':'▶ Resume';
-  $('#play').classList.remove('stop')}
-$('#play').onclick=()=>{
-  if(timer)return stop();
-  if(i>=AUDIT.length){i=0;acc={rec:0,spent:0,eps:new Set(),won:new Set(),lost:0};
-    $('#feed').innerHTML=''}
-  play();
-};
-$('#speeds').onclick=e=>{
-  const b=e.target.closest('button'); if(!b)return;
-  delay=+b.dataset.s;
-  [...$('#speeds').children].forEach(x=>x.setAttribute('aria-pressed',x===b));
-  if(timer){clearInterval(timer);timer=setInterval(step,delay)}
-};
-paintRun();
+/* ---- candlestick: wheel zooms about the cursor, drag pans, hover reads OHLC ---- */
+function candlestick(host,candles,onChange){
+  const box=$('<div class="chartbox"><svg class="chart" viewBox="0 0 1000 380" preserveAspectRatio="none"></svg><div class="tip"></div></div>');
+  host.append(box);
+  const svg=box.querySelector('svg'), tip=box.querySelector('.tip');
+  const W=1000,H=380,L=78,R=16,T=18,B=32,pw=W-L-R,ph=H-T-B;
+  let s=0,e=candles.length,hover=-1,drag=null;
 
-/* ================= requests ================= */
-const REQ=[];
-D.accounts.forEach(a=>a.answers.forEach(x=>REQ.push({a,x})));
-let sel=0;
-
-function paintList(){
-  $('#reqList').innerHTML=REQ.map((r,n)=>`
-    <button class="lrow" aria-selected="${n===sel}" data-n="${n}">
-      <span class="who">${esc(r.a.name)}</span>
-      <span class="what">${esc(r.x.label)}</span>
-      <span class="pill p-${r.x.outcome}">${r.x.outcome}</span>
-    </button>`).join('');
-  $('#reqList').querySelectorAll('.lrow').forEach(b=>
-    b.onclick=()=>{sel=+b.dataset.n;paintList();paintDetail()});
-}
-
-function stageRow(n,cls,head,val,body,d){
-  return `<div class="stage ${cls}" style="animation-delay:${d}ms">
-    <span class="n">${n}</span><span class="t">
-    <span class="h"><span>${head}</span><span class="val num">${val}</span></span>
-    <span class="b">${body}</span></span></div>`;
-}
-
-function paintDetail(){
-  const {a,x}=REQ[sel];
-  const g=x.grading, bind=x.rulings.find(r=>r.binding&&r.rule!=='—');
-  let s=`<div class="dhead"><h2>${esc(x.label)}</h2>
-      <span class="pill p-${x.outcome}">${x.outcome}</span></div>
-    <div class="dsub">${esc(a.name)} · ${esc(a.plan)} · ${esc(a.amount)}
-      · ${esc(a.rail.replace(/_/g,' '))}</div>`;
-
-  s+=stageRow(1, x.action?(x.rulings.length||x.outcome!=='declined'?'pass':'fail')
-      :'pass', 'Classify',
-    esc(a.disposition), x.action?esc(x.action):'no action — not a request', 0);
-
-  s+=stageRow(2, g?'pass':'', 'Price',
-    g?inr2(g.expected_value):'—',
-    g?`p(recover) ${g.p_recover.toFixed(3)} · p(revoke) ${g.p_revoke.toFixed(3)}`
-     :'not priced', 110);
-
-  s+=stageRow(3,
-    !x.adjudicated?'':x.outcome==='declined'?'fail':x.outcome==='scheduled'?'hold':'pass',
-    'Adjudicate',
-    x.adjudicated?esc(x.outcome):'skipped',
-    x.adjudicated?(bind?esc(bind.rule):'no rule objected')
-      :'not adjudicated — not ours to refuse', 220);
-
-  s+=stageRow(4, x.outcome==='declined'?'fail':'pass', 'Act',
-    esc(x.happens_at||(x.outcome==='declined'?'—':'now')),
-    esc(x.headline), 330);
-
-  if(x.rulings.length){
-    s+=`<h3 class="sec">Rules consulted</h3><div class="tw"><table>
-      <tr><th>Rule</th><th>Basis</th><th>Verdict</th></tr>`+
-      x.rulings.map(r=>`<tr class="${r.binding?'bind':''}">
-        <td class="mono">${esc(r.rule)}</td>
-        <td>${r.basis==='regulatory'?'<span class="pill p-reg">reg</span>':
-          r.basis==='policy'?'<span class="pill p-pol">policy</span>':'—'}</td>
-        <td>${esc(r.verdict)}</td></tr>`).join('')+`</table></div>`;
-    if(bind)s+=`<p class="note">${esc(bind.reason)}</p>`;
+  const smooth=p=>{
+    if(p.length<2) return '';
+    let d='M'+p[0][0]+','+p[0][1];
+    for(let i=0;i<p.length-1;i++){
+      const a=p[i-1]||p[i],b=p[i],c=p[i+1],n=p[i+2]||c;
+      d+=' C'+(b[0]+(c[0]-a[0])/6)+','+(b[1]+(c[1]-a[1])/6)+' '+(c[0]-(n[0]-b[0])/6)+','+(c[1]-(n[1]-b[1])/6)+' '+c[0]+','+c[1];
+    }
+    return d;
+  };
+  function draw(){
+    const v=candles.slice(s,e), n=v.length;
+    if(!n){svg.innerHTML='';return;}
+    let lo=Infinity,hi=-Infinity;
+    v.forEach(c=>{lo=Math.min(lo,c.low);hi=Math.max(hi,c.high)});
+    const pad=(hi-lo)*.08||1; lo-=pad; hi+=pad;
+    const X=i=>L+(n===1?pw/2:(i+.5)*(pw/n)), Y=val=>T+ph-(val-lo)/(hi-lo)*ph;
+    const cw=Math.max(1.5,Math.min(22,pw/n*0.62));
+    let g='';
+    for(let k=0;k<=4;k++){
+      const val=lo+(hi-lo)*k/4, y=Y(val);
+      g+='<line x1="'+L+'" y1="'+y+'" x2="'+(W-R)+'" y2="'+y+'" stroke="#e4e8f3"/>'
+        +'<text x="'+(L-10)+'" y="'+(y+4)+'" text-anchor="end" font-size="11" fill="#767ca0">'+inr(val)+'</text>';
+    }
+    const step=Math.max(1,Math.ceil(n/9));
+    v.forEach((c,i)=>{if(i%step===0)
+      g+='<text x="'+X(i)+'" y="'+(H-10)+'" text-anchor="middle" font-size="11" fill="#767ca0">'+esc(c.label)+'</text>'});
+    v.forEach((c,i)=>{
+      const up=c.close>=c.open, col=up?'#0ea472':'#e11d48', yO=Y(c.open), yC=Y(c.close);
+      g+='<line x1="'+X(i)+'" y1="'+Y(c.high)+'" x2="'+X(i)+'" y2="'+Y(c.low)+'" stroke="'+col+'" stroke-width="1.3"/>'
+        +'<rect x="'+(X(i)-cw/2)+'" y="'+Math.min(yO,yC)+'" width="'+cw+'" height="'+Math.max(1.5,Math.abs(yC-yO))
+        +'" rx="'+(cw>6?2:0)+'" fill="'+(up?col:'#fff')+'" stroke="'+col+'" stroke-width="1.3"/>';
+    });
+    g+='<path d="'+smooth(v.map((c,i)=>[X(i),Y(c.close)]))+'" fill="none" stroke="#4f46e5" stroke-width="2" opacity=".5" stroke-linecap="round"/>';
+    if(hover>=0&&hover<n){
+      const c=v[hover], x=X(hover);
+      g+='<line x1="'+x+'" y1="'+T+'" x2="'+x+'" y2="'+(T+ph)+'" stroke="#4f46e5" stroke-width="1" stroke-dasharray="3 3"/>'
+        +'<circle cx="'+x+'" cy="'+Y(c.close)+'" r="4.5" fill="#fff" stroke="#4f46e5" stroke-width="2.5"/>';
+      tip.style.opacity=1;
+      tip.style.left=Math.min(Math.max(x/W*box.clientWidth-85,4),Math.max(4,box.clientWidth-195))+'px';
+      tip.style.top='10px';
+      tip.innerHTML='<b>'+esc(c.label)+'</b>'
+        +'<div class="r"><span>Open</span><span>'+inr(c.open)+'</span></div>'
+        +'<div class="r"><span>High</span><span>'+inr(c.high)+'</span></div>'
+        +'<div class="r"><span>Low</span><span>'+inr(c.low)+'</span></div>'
+        +'<div class="r"><span>Close</span><span>'+inr(c.close)+'</span></div>'
+        +'<div class="r" style="opacity:.7;margin-top:4px"><span>Actions</span><span>'+c.events+'</span></div>';
+    } else tip.style.opacity=0;
+    svg.innerHTML=g;
+    // Every path that changes the window - button, wheel, drag - lands here, so
+    // the readout cannot say one thing while the chart shows another.
+    if(onChange) onChange(e-s,candles.length);
   }
-
-  if(g){
-    s+=`<h3 class="sec">Expected value</h3><dl class="kv">
-      <dt>Recovery worth</dt><dd class="num">${inr2(g.recovery_value)}</dd>
-      <dt>× p(recover) ${g.p_recover.toFixed(3)}</dt>
-        <dd class="num pos">+${inr2(g.recovery_value*g.p_recover)}</dd>
-      <dt>× p(revoke) ${g.p_revoke.toFixed(3)}</dt>
-        <dd class="num neg">−${inr2(g.revocation_charge*g.p_revoke)}</dd>
-      <dt>Contact fatigue</dt><dd class="num neg">−${inr2(g.fatigue)}</dd>
-      <dt>Cost</dt><dd class="num neg">−${inr2(g.cost)}</dd>
-      <dt class="tot">Expected value</dt>
-      <dd class="tot num ${g.expected_value>=0?'pos':'neg'}">${inr2(g.expected_value)}</dd>
-    </dl>`;
-    if(!g.worth_unprompted&&x.outcome!=='declined')
-      s+=`<p class="note">Negative, and done anyway — the customer asked and the
-        gate permits it.</p>`;
-  }
-
-  if(a.messages.length&&x.outcome!=='declined'&&x.action){
-    s+=`<h3 class="sec">Message sent</h3>`+a.messages.map(m=>`
-      <div class="sms"><div class="t">${esc(m.body)}</div>
-      <div class="m mono">${esc(m.language)} · ${m.segments} seg ·
-        ${m.units} units · ${esc(m.encoding)}</div></div>`).join('');
-  }
-  $('#reqDetail').innerHTML=s;
+  const idxAt=ev=>{
+    const r=svg.getBoundingClientRect(), n=e-s;
+    return Math.round(((ev.clientX-r.left)/r.width*W-L)/(pw/n)-.5);
+  };
+  svg.addEventListener('mousemove',ev=>{
+    if(drag){
+      const r=svg.getBoundingClientRect(), n=e-s;
+      const dx=Math.round((drag.x-ev.clientX)/r.width*W/(pw/n));
+      let ns=drag.s+dx, ne=drag.e+dx;
+      if(ns<0){ne-=ns;ns=0} if(ne>candles.length){ns-=ne-candles.length;ne=candles.length}
+      s=Math.max(0,ns); e=Math.min(candles.length,ne); draw(); return;
+    }
+    hover=idxAt(ev); draw();
+  });
+  svg.addEventListener('mouseleave',()=>{hover=-1;drag=null;draw()});
+  svg.addEventListener('mousedown',ev=>{drag={x:ev.clientX,s:s,e:e};svg.style.cursor='grabbing'});
+  window.addEventListener('mouseup',()=>{drag=null;svg.style.cursor='crosshair'});
+  svg.addEventListener('wheel',ev=>{
+    ev.preventDefault();
+    const n=e-s, at=Math.max(0,Math.min(n-1,idxAt(ev))), frac=at/Math.max(1,n-1);
+    const span=Math.max(5,Math.min(candles.length,Math.round(n*(ev.deltaY>0?1.22:0.82))));
+    let ns=Math.round(s+at-frac*span), ne=ns+span;
+    if(ns<0){ne-=ns;ns=0} if(ne>candles.length){ns-=ne-candles.length;ne=candles.length}
+    s=Math.max(0,ns); e=Math.min(candles.length,ne); draw();
+  },{passive:false});
+  draw();
+  return {zoom(f){const n=e-s,c=(s+e)/2,span=Math.max(5,Math.min(candles.length,Math.round(n*f)));
+      s=Math.max(0,Math.round(c-span/2)); e=Math.min(candles.length,s+span); draw();},
+    reset(){s=0;e=candles.length;draw()}, span(){return e-s}};
 }
-paintList(); paintDetail();
 
-/* ================= batch ================= */
-const P=D.policies, ours=P.rows.find(r=>r.policy==='rebound_sequencer'),
-      lad=P.rows.find(r=>r.policy==='fixed_ladder');
-tiles($('#batchTiles'),[
-  ['Episodes',D.episodes.toLocaleString('en-IN'),'this batch'],
-  ['Recovery',pct(ours.recovery),'ladder '+pct(lad.recovery)],
-  ['Revocation',pct(ours.revocation),'ladder '+pct(lad.revocation)],
-  ['Contacts / ep',ours.contacts.toFixed(2),'ladder 0.00'],
-  ['Net ₹/1000',inr(ours.net),'vs ladder '+(ours.gap>=0?'+':'')+inr(ours.gap),
-    ours.gap>=0?'up':'down'],
-]);
-$('#polTable').innerHTML=`<tr><th>Policy</th><th style="text-align:right">Recovery</th>
-  <th style="text-align:right">Revoked</th><th style="text-align:right">Contacts</th>
-  <th style="text-align:right">Recovered</th><th style="text-align:right">Spent</th>
-  <th style="text-align:right">Net ₹/1000</th><th style="text-align:right">vs ladder</th></tr>`+
-  P.rows.map(r=>`<tr${r.policy==='rebound_sequencer'?' class="bind"':''}>
-    <td class="mono">${esc(r.policy)}</td>
-    <td class="num" style="text-align:right">${pct(r.recovery)}</td>
-    <td class="num" style="text-align:right">${pct(r.revocation)}</td>
-    <td class="num" style="text-align:right">${r.contacts.toFixed(2)}</td>
-    <td class="num" style="text-align:right">${inr(r.recovered)}</td>
-    <td class="num" style="text-align:right">${inr(r.spent)}</td>
-    <td class="num ${r.net>=0?'pos':'neg'}" style="text-align:right">${inr(r.net)}</td>
-    <td class="num ${r.gap>=0?'pos':'neg'}" style="text-align:right">${
-      r.policy==='fixed_ladder'?'—':(r.gap>=0?'+':'')+inr(r.gap)}</td></tr>`).join('');
-const lead=P.rows[0].policy;
-$('#polNote').innerHTML=(lead!=='rebound_sequencer'
-  ?`<b style="color:var(--warn)">${esc(lead)} leads this batch.</b> `:'')+
-  `One seed, reduced scale. Reported claim: five held-out seeds, mean
-   <b>+40,916</b> ₹/1000, not significant (p≈0.07), negative on one.`;
+/* ---------------- overview ---------------- */
+(function(){
+  const c=P.candles||[], el=document.getElementById('v-overview');
+  const last=c.length?c[c.length-1].close:0;
+  let best=null, worst=null;
+  c.forEach(d=>{ if(!best||d.high>best.high) best=d; if(!worst||(d.close-d.open)<(worst.close-worst.open)) worst=d; });
 
-const C={done:'#2ecc71',scheduled:'#f5b13d',honoured:'#4c8dff',declined:'#ff6b5e'};
-const o=D.requests.outcomes, keys=Object.keys(C).filter(k=>o[k]);
-$('#outcomes').innerHTML=`<div class="bars">`+keys.map(k=>
-  `<i style="flex:${o[k]};background:${C[k]}"></i>`).join('')+`</div>
-  <div class="leg">`+keys.map(k=>
-  `<span><span class="sw" style="background:${C[k]}"></span>${k} <b>${o[k]}</b></span>`
-  ).join('')+`</div>
-  <p class="note">Declined = the taxonomy or a regulator refused. Honoured = never
-   adjudicated.</p>`;
+  el.append($('<div class="grid stats">'
+    +'<div class="stat up"><div class="k">Recovered</div><div class="v">'+inr(US.recovered)+'</div>'
+    +'<div class="d">across <b>'+DATA.episodes.toLocaleString('en-IN')+'</b> failed debits</div></div>'
+    +'<div class="stat"><div class="k">Recovery rate</div><div class="v">'+pct(US.recovery)+'</div>'
+    +'<div class="d">ladder <b>'+pct(LAD.recovery)+'</b> · <span class="pos">+'+((US.recovery-LAD.recovery)*100).toFixed(1)+' pts</span></div></div>'
+    +'<div class="stat"><div class="k">Spent recovering</div><div class="v">'+inr(US.spent)+'</div>'
+    +'<div class="d">ladder spends <b>'+inr(LAD.spent)+'</b> for less back</div></div>'
+    /* Every card here is this seed. The twenty-seed figure is a different run
+       and belongs on Comparison - putting it in this row would let a reader
+       take it as describing the numbers beside it, which on this seed are the
+       opposite sign. */
+    +'<div class="stat '+(US.gap>0?'up':'down')+'"><div class="k">Net vs ladder</div>'
+    +'<div class="v">'+sgn(US.gap)+'</div>'
+    +'<div class="d">per 1,000 episodes · <b>this seed</b></div></div></div>'));
 
-$('#excTable').innerHTML=`<tr><th>Reason</th><th style="text-align:right">n</th></tr>`+
-  P.exceptions.map(e=>`<tr><td>${esc(e.reason)}</td>
-    <td class="num" style="text-align:right">${e.count}</td></tr>`).join('');
-$('#formula').textContent=D.grading.formula;
-$('#termTable').innerHTML=`<tr><th>Term</th><th>Meaning</th></tr>`+
-  D.grading.terms.map(([k,v])=>`<tr><td class="mono">${esc(k)}</td>
-    <td>${esc(v)}</td></tr>`).join('');
+  /* Recovering more money and still ending behind looks like a contradiction,
+     and it is the first thing anyone asks. Net subtracts the lifetime value of
+     mandates lost along the way, so the answer is arithmetic rather than
+     argument - laid out as a waterfall from the totals above it. */
+  const dRec=US.recovered-LAD.recovered, dSpend=LAD.spent-US.spent,
+        dDest=LAD.destroyed-US.destroyed, dNet=dRec+dSpend+dDest;
+  el.append($('<div class="card" style="margin-bottom:18px"><header><div>'
+    +'<h2>Recovering more, and still behind</h2>'
+    +'<div class="hint">every rupee of the difference against the ladder, on this seed</div></div></header>'
+    +'<div class="pad"><div class="ev" style="max-width:620px">'
+    +'<div class="l"><span>Collected that the ladder did not</span><span class="pos">'+sgn(dRec)+'</span></div>'
+    +'<div class="l"><span>Spent less getting there</span><span class="pos">'+sgn(dSpend)+'</span></div>'
+    +'<div class="l"><span>Mandates lost while recovering</span><span class="neg">'+sgn(dDest)+'</span></div>'
+    +'<div class="l tot"><span>Net against the ladder</span><span class="'+(dNet>0?'pos':'neg')+'">'+sgn(dNet)+'</span></div></div>'
+    +'<div class="note" style="margin-top:14px;max-width:80ch">Net counts the future value of a revoked mandate, not just this cycle. '
+    +'Both policies lose about the same <i>number</i> — '+Math.round(US.revocation*DATA.episodes)+' against '
+    +Math.round(LAD.revocation*DATA.episodes)+' of '+DATA.episodes.toLocaleString('en-IN')+' — but the ladder never contacts anyone, '
+    +'and this one contacts '+US.contacts.toFixed(2)+' times per episode. It works the largest balances hardest, so the mandates it '
+    +'loses are worth more than the ones the ladder loses. That is a pricing error the project has measured and not yet fixed: '
+    +'the model prices contact fatigue flat while the world compounds it.</div></div></div>'));
 
-$('#badge').textContent=D.episodes.toLocaleString('en-IN')+' episodes · built '+D.generated_at;
-$('#foot').innerHTML='Every figure computed in Python by the shipped modules and '+
-  'embedded as data — the browser replays, it never recomputes. Simulated data.';
+  if(HO) el.append($('<div class="warnbox" style="margin-bottom:18px">'
+    +'<b>This model is fitted on a fifth of the training log</b> the measured claim uses — 1,200 customers here against 6,000 — '
+    +'so it over-contacts. One seed at reduced scale is not a small version of the experiment; the ordering of policies at this '
+    +'scale carries no information. The measured claim is on <b>Comparison</b>: '+HO.seeds+' held-out seeds at full scale, '
+    +sgn(HO.mean)+', ahead on '+HO.won+' of '+HO.seeds+'.</div>'));
+
+  const card=$('<div class="card"><header>'
+    +'<div><h2>Running net position</h2><div class="hint">recovered minus spent, by day · scroll to zoom, drag to pan</div></div>'
+    +'<div class="ctrls"><button class="btn" data-z="out">− Zoom out</button>'
+    +'<button class="btn" data-z="in">+ Zoom in</button><button class="btn" data-z="reset">Reset</button></div></header>'
+    +'<div class="pad"><div id="ch"></div><div class="legend" style="margin-top:12px">'
+    +'<span><i style="background:#0ea472"></i>Day closed up</span>'
+    +'<span><i style="background:#fff;border:1.5px solid #e11d48"></i>Day closed down</span>'
+    +'<span><i style="background:#4f46e5;opacity:.5"></i>Trend through closes</span>'
+    +'<span style="margin-left:auto" id="spanlbl"></span></div></div></div>');
+  el.append(card);
+
+  if(c.length){
+    const lbl=card.querySelector('#spanlbl');
+    const api=candlestick(card.querySelector('#ch'),c,
+      (shown,total)=>lbl.textContent=shown+' of '+total+' days shown');
+    card.querySelectorAll('[data-z]').forEach(b=>b.onclick=()=>{
+      const k=b.dataset.z; k==='reset'?api.reset():api.zoom(k==='in'?0.6:1.7);});
+    el.append($('<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(210px,1fr));margin-top:18px">'
+      +'<div class="card pad"><h3 class="sec">Closing position</h3><div style="font-size:22px;font-weight:700;letter-spacing:-.6px">'+inr(last)+'</div>'
+      +'<div class="note">Negative under every policy. “Ahead” means less bad, not profitable.</div></div>'
+      +'<div class="card pad"><h3 class="sec">High-water mark</h3><div style="font-size:22px;font-weight:700;letter-spacing:-.6px">'+inr(best?best.high:0)+'</div>'
+      +'<div class="note">'+(best?esc(best.label):'—')+'</div></div>'
+      +'<div class="card pad"><h3 class="sec">Worst day</h3><div style="font-size:22px;font-weight:700;letter-spacing:-.6px">'+(worst?sgn(worst.close-worst.open):'—')+'</div>'
+      +'<div class="note">'+(worst?esc(worst.label):'—')+'</div></div></div>'));
+  } else card.querySelector('#ch').append($('<div class="note">No audit trail in this build.</div>'));
+})();
+
+/* ---------------- comparison ---------------- */
+(function(){
+  const el=document.getElementById('v-compare');
+  if(!HO){ el.append($('<div class="card pad note">No <code>holdout20.csv</code> found. Run <code>scripts/holdout.py</code> to populate this view.</div>')); return; }
+  el.append($('<div class="grid stats">'
+    +'<div class="stat up"><div class="k">Mean gap vs ladder</div><div class="v">'+sgn(HO.mean)+'</div><div class="d">₹ per 1,000 episodes</div></div>'
+    +'<div class="stat"><div class="k">Seeds won</div><div class="v">'+HO.won+' / '+HO.seeds+'</div><div class="d">held out from every selection decision</div></div>'
+    +'<div class="stat"><div class="k">Significance</div><div class="v">'+(HO.p<0.001?'p &lt; 0.001':'p = '+HO.p.toFixed(3))+'</div><div class="d">t = '+HO.t+' on '+HO.df+' df</div></div>'
+    +'<div class="stat"><div class="k">Spread</div><div class="v">±'+Math.round(HO.sd).toLocaleString('en-IN')+'</div><div class="d">standard deviation across seeds</div></div></div>'));
+
+  const mx=Math.max.apply(null,HO.policies.map(p=>Math.abs(p.mean_gap)))||1;
+  const bars=HO.policies.map(p=>{
+    const us=p.policy==='rebound_sequencer';
+    const col=p.mean_gap>0?'var(--up)':p.mean_gap<0?'var(--down)':'var(--muted)';
+    return '<tr class="'+(us?'us':'')+'"><td>'+(us?'★ ':'')+esc(nm(p.policy))+'</td>'
+      +'<td style="width:44%"><div class="bar"><i style="width:'+(Math.abs(p.mean_gap)/mx*100)+'%;background:'+col+'"></i></div></td>'
+      +'<td class="num '+(p.mean_gap>0?'pos':p.mean_gap<0?'neg':'')+'">'+(p.policy==='fixed_ladder'?'baseline':sgn(p.mean_gap))+'</td>'
+      +'<td class="num">'+p.won+'/'+HO.seeds+'</td></tr>';
+  }).join('');
+  el.append($('<div class="card" style="margin-bottom:18px"><header><div><h2>Every policy against the fixed ladder</h2>'
+    +'<div class="hint">mean net gap, ₹ per 1,000 episodes</div></div></header>'
+    +'<div class="pad"><table><thead><tr><th>Policy</th><th></th><th class="num">Mean gap</th><th class="num">Seeds won</th></tr></thead>'
+    +'<tbody>'+bars+'</tbody></table></div></div>'));
+
+  const gs=HO.per_seed, gmax=Math.max.apply(null,gs.map(g=>Math.abs(g.gap)))||1;
+  const strip=gs.map(g=>{
+    const h=Math.abs(g.gap)/gmax*100, up=g.gap>0;
+    return '<div style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:4px" title="seed '+esc(g.seed)+' · '+sgn(g.gap)+'">'
+      +'<div style="height:104px;display:flex;align-items:flex-end;width:100%">'
+      +(up?'<div style="width:100%;height:'+h+'%;background:var(--up);border-radius:3px 3px 0 0"></div>':'')+'</div>'
+      +'<div style="height:1px;background:var(--ink);width:100%"></div>'
+      +'<div style="height:38px;display:flex;align-items:flex-start;width:100%">'
+      +(!up?'<div style="width:100%;height:'+h+'%;background:var(--down);border-radius:0 0 3px 3px"></div>':'')+'</div></div>';
+  }).join('');
+  el.append($('<div class="card" style="margin-bottom:18px"><header>'
+    +'<div><h2>Seed by seed</h2><div class="hint">all '+HO.seeds+' held-out seeds, sorted — losses included</div></div>'
+    +'<div class="legend"><span><i style="background:var(--up)"></i>ahead of ladder</span><span><i style="background:var(--down)"></i>behind</span></div></header>'
+    +'<div class="pad"><div style="display:flex;gap:3px;align-items:stretch">'+strip+'</div>'
+    +'<div class="note" style="margin-top:14px">One seed is negative: <b>'+esc(gs[0].seed)+'</b> at '+sgn(gs[0].gap)
+    +'. It is one of the original five, and it is shown rather than dropped.</div></div></div>'));
+
+  el.append($('<div class="card"><header><div><h2>How this number was reached</h2></div></header>'
+    +'<div class="pad"><table><thead><tr><th>Measurement</th><th class="num">Mean gap</th><th class="num">Won</th><th class="num">p</th></tr></thead><tbody>'
+    +'<tr><td>Selection seeds</td><td class="num">+₹164,807</td><td class="num">4/4</td><td class="num">—</td></tr>'
+    +'<tr><td>Held out, old harness</td><td class="num">+₹56,787</td><td class="num">5/5</td><td class="num">—</td></tr>'
+    +'<tr><td>Held out, fixed harness</td><td class="num">+₹40,916</td><td class="num">4/5</td><td class="num">0.070</td></tr>'
+    +'<tr class="us"><td>★ Held out, twenty seeds</td><td class="num">'+sgn(HO.mean)+'</td><td class="num">'+HO.won+'/'+HO.seeds+'</td>'
+    +'<td class="num">'+(HO.p<0.001?'&lt;0.001':HO.p.toFixed(3))+'</td></tr></tbody></table>'
+    +'<div class="note" style="margin-top:14px;max-width:80ch">The fifteen added seeds were derived from a fixed <code>SeedSequence</code> rather than chosen, and all twenty were committed to before the run.</div>'
+    +'</div></div>'));
+})();
+
+/* ---------------- this batch ---------------- */
+(function(){
+  const el=document.getElementById('v-batch');
+  el.append($('<div class="warnbox" style="margin-bottom:18px"><b>This page is one seed at reduced scale.</b> '
+    +'A reduced-scale run is not a small version of the experiment — it is a different, weaker model, and its <i>ordering</i> carries no information. '
+    +'Here Rebound is '+(US.gap>=0?'ahead of':'<b>behind</b>')+' the ladder on net'
+    +(US.gap<0?' by '+inr(Math.abs(US.gap)):'')+', while recovering '+((US.recovery-LAD.recovery)*100).toFixed(1)
+    +' points more of the money. The claim that survives is on <b>Comparison</b>: twenty seeds, full scale.</div>'));
+  const rows=ROWS.map(r=>'<tr class="'+(r.policy==='rebound_sequencer'?'us':'')+'">'
+    +'<td>'+(r.policy==='rebound_sequencer'?'★ ':'')+esc(nm(r.policy))+'</td>'
+    +'<td class="num">'+pct(r.recovery)+'</td><td class="num">'+pct(r.revocation,2)+'</td>'
+    +'<td class="num">'+r.contacts.toFixed(2)+'</td><td class="num">'+inr(r.recovered)+'</td>'
+    +'<td class="num">'+inr(r.spent)+'</td><td class="num">'+inr(r.net)+'</td>'
+    +'<td class="num '+(r.gap>0?'pos':r.gap<0?'neg':'')+'">'+(r.policy==='fixed_ladder'?'—':sgn(r.gap))+'</td></tr>').join('');
+  el.append($('<div class="card" style="margin-bottom:18px"><header><div><h2>Policies on this batch</h2>'
+    +'</div></header>'
+    +'<div class="pad"><table><thead><tr><th>Policy</th><th class="num">Recovery</th><th class="num">Revocation</th>'
+    +'<th class="num">Contacts/ep</th><th class="num">Recovered</th><th class="num">Spent</th><th class="num">Net</th><th class="num">Gap</th></tr></thead>'
+    +'<tbody>'+rows+'</tbody></table></div></div>'));
+  const ex=P.exceptions||[], exmax=Math.max.apply(null,[1].concat(ex.map(e=>e.count)));
+  el.append($('<div class="card"><header><div><h2>What it could not recover</h2>'
+    +'<div class="hint">'+(P.unrecovered||0).toLocaleString('en-IN')+' episodes, with a reason for each</div></div></header>'
+    +'<div class="pad"><table><tbody>'+ex.map(e=>'<tr><td>'+esc(e.reason)+'</td>'
+    +'<td style="width:50%"><div class="bar"><i style="width:'+(e.count/exmax*100)+'%;background:var(--brand)"></i></div></td>'
+    +'<td class="num">'+e.count.toLocaleString('en-IN')+'</td><td class="num">'+pct(e.share)+'</td></tr>').join('')
+    +'</tbody></table></div></div>'));
+})();
+
+/* ---------------- requests ---------------- */
+(function(){
+  const el=document.getElementById('v-requests'), items=[];
+  DATA.accounts.forEach(a=>(a.answers||[]).forEach(ans=>items.push({a:a,ans:ans})));
+  const OUT={done:['ok','Done'],honoured:['ok','Honoured'],scheduled:['wait','Scheduled'],declined:['no','Declined']};
+  const colr=o=>({done:'var(--up)',honoured:'var(--up)',scheduled:'var(--warn)',declined:'var(--down)'}[o]||'var(--muted)');
+  const split=$('<div class="split"></div>');
+  const list=$('<div class="card"><header><div><h2>Customer requests</h2><div class="hint">'+items.length
+    +' across '+DATA.accounts.length+' accounts</div></div></header><div class="rlist"></div></div>');
+  const detail=$('<div class="card"><div class="pad" id="dt"></div></div>');
+  split.append(list,detail); el.append(split);
+  const holder=list.querySelector('.rlist');
+  items.forEach((it,i)=>{
+    const o=OUT[it.ans.outcome]||['neutral',it.ans.outcome];
+    const r=$('<div class="row"><span class="dot" style="background:'+colr(it.ans.outcome)+'"></span>'
+      +'<div style="min-width:0;flex:1"><div class="nm">'+esc(it.a.name)+'</div><div class="as">'+esc(it.ans.label)+'</div></div>'
+      +'<span class="chip '+o[0]+'">'+esc(o[1])+'</span></div>');
+    r.onclick=()=>{holder.querySelectorAll('.row').forEach(x=>x.setAttribute('aria-selected','false'));
+      r.setAttribute('aria-selected','true'); show(it);};
+    holder.append(r); if(i===0) setTimeout(()=>r.click(),0);
+  });
+  function show(o){
+    const a=o.a, ans=o.ans, g=ans.grading, dt=detail.querySelector('#dt');
+    const verdict=ans.outcome==='declined'?'bad':ans.outcome==='scheduled'?'hold':'good';
+    const bind=(ans.rulings||[]).filter(r=>r.binding)[0];
+    const lab=(OUT[ans.outcome]||['','—'])[1];
+    let ev='<div class="note">Not priced — the action never reached the pricer.</div>';
+    if(g){
+      ev='<div class="ev">'
+        +'<div class="l"><span>Recovery value</span><span>'+inr(g.recovery_value)+'</span></div>'
+        +'<div class="l"><span>× p(recover) '+g.p_recover.toFixed(4)+'</span><span>+₹'+(g.recovery_value*g.p_recover).toFixed(2)+'</span></div>'
+        +'<div class="l"><span>× p(revoke) '+g.p_revoke.toFixed(4)+'</span><span>−₹'+(g.revocation_charge*g.p_revoke).toFixed(2)+'</span></div>'
+        +'<div class="l"><span>Contact fatigue</span><span>−₹'+g.fatigue.toFixed(2)+'</span></div>'
+        +'<div class="l"><span>Cost to act</span><span>−₹'+g.cost.toFixed(2)+'</span></div>'
+        +'<div class="l tot"><span>Expected value</span><span>'+(g.expected_value>=0?'+':'−')+'₹'+Math.abs(g.expected_value).toFixed(2)+'</span></div></div>';
+      if(g.expected_value<0&&ans.outcome!=='declined')
+        ev+='<div class="note" style="margin-top:10px">Negative, and done anyway — the customer asked, and the gate permits it. Refusing someone’s own request because our model does not expect it to pay for itself is not ours to decide.</div>';
+      if(g.expected_value>0&&ans.outcome==='declined')
+        ev+='<div class="note" style="margin-top:10px"><b>Profitable, and refused.</b> The model wanted this. A regulatory rule overruled it.</div>';
+    }
+    dt.innerHTML='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:18px">'
+      +'<div><div style="font-size:19px;font-weight:700;letter-spacing:-.4px">'+esc(a.name)+'</div>'
+      +'<div class="note">'+esc(a.plan)+' · '+esc(a.amount)+' · '+esc(a.rail)+' · '+esc(a.bank)+'</div></div>'
+      +'<div style="text-align:right"><div class="note">asked</div><div style="font-weight:650">'+esc(ans.label)+'</div></div></div>'
+      +'<div class="pipe">'
+      +'<div class="stage"><div class="s">1 · Classify</div><div class="t">'+esc(a.disposition)+'</div><div class="b">'+esc(a.failure_label)+'</div></div>'
+      +'<div class="stage"><div class="s">2 · Price</div><div class="t">'+(g?(g.expected_value>=0?'+':'−')+'₹'+Math.abs(g.expected_value).toFixed(2):'n/a')+'</div><div class="b">expected value</div></div>'
+      +'<div class="stage '+verdict+'"><div class="s">3 · Adjudicate</div><div class="t">'
+      +(ans.adjudicated?(ans.outcome==='declined'?'Denied':ans.outcome==='scheduled'?'Deferred':'Allowed'):'Not reached')
+      +'</div><div class="b">'+(bind?esc(bind.rule):'no rule bound')+'</div></div>'
+      +'<div class="stage"><div class="s">4 · Act</div><div class="t">'+esc(lab)+'</div><div class="b">'+esc(ans.action||'—')+'</div></div></div>'
+      +'<div style="background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:18px">'
+      +'<div style="font-weight:600;margin-bottom:4px">'+esc(ans.headline)+'</div><div class="note">'+esc(ans.detail)+'</div></div>'
+      +'<div class="grid" style="grid-template-columns:1fr 1fr">'
+      +'<div><h3 class="sec">Rules considered</h3><table><tbody>'
+      +((ans.rulings||[]).map(r=>'<tr><td><span class="chip '+(r.verdict==='deny'?'no':r.verdict==='defer'?'wait':'ok')+'">'+esc(r.verdict)+'</span></td>'
+        +'<td><b>'+esc(r.rule)+'</b><div class="note">'+esc(r.reason)+'</div></td>'
+        +'<td class="num"><span class="chip neutral">'+esc(r.basis)+'</span></td></tr>').join('')
+        ||'<tr><td class="note">No rule was reached — the action is not structurally legal for this failure.</td></tr>')
+      +'</tbody></table></div><div><h3 class="sec">What it was worth</h3>'+ev+'</div></div>'
+      +((a.messages||[]).length?'<div style="margin-top:20px"><h3 class="sec">Message that would go out</h3>'
+        +'<div class="msg">'+esc(a.messages[0].body)+'</div><div class="note" style="margin-top:7px">'
+        +esc(a.messages[0].language)+' · '+esc(a.messages[0].channel)+' · '+a.messages[0].segments+' segment(s) · '
+        +esc(a.messages[0].encoding)+(a.messages[0].fell_back?' · template fallback':'')+'</div></div>':'');
+    dt.querySelectorAll('.stage').forEach((s,i)=>setTimeout(()=>s.classList.add('on'),90+i*230));
+  }
+})();
+
+/* ---------------- live run ---------------- */
+(function(){
+  const el=document.getElementById('v-live'), A=P.audit||[];
+  el.append($('<div class="grid stats">'
+    +'<div class="stat"><div class="k">Actions replayed</div><div class="v" id="s-n">0</div><div class="d">of '+A.length.toLocaleString('en-IN')+'</div></div>'
+    +'<div class="stat up"><div class="k">Recovered</div><div class="v" id="s-r">₹0</div><div class="d">collected from failed debits</div></div>'
+    +'<div class="stat down"><div class="k">Spent</div><div class="v" id="s-s">₹0</div><div class="d">gateway fees and messages</div></div>'
+    +'<div class="stat"><div class="k">Revocations</div><div class="v" id="s-v">0</div><div class="d">mandates lost while recovering</div></div></div>'));
+  el.append($('<div class="card"><header><div><h2>Recorded rollout</h2>'
+    +'<div class="hint">nothing here is recomputed in the browser</div></div>'
+    +'<div class="ctrls"><button class="btn" id="play">▶ Play</button>'
+    +'<button class="btn" data-sp="1" aria-pressed="true">1×</button><button class="btn" data-sp="4">4×</button>'
+    +'<button class="btn" data-sp="16">16×</button><button class="btn" id="rst">Reset</button></div></header>'
+    +'<div style="padding:14px 20px 0"><div class="prog"><i id="bar"></i></div></div><div class="feed" id="feed"></div></div>'));
+  const feed=el.querySelector('#feed'), bar=el.querySelector('#bar'), play=el.querySelector('#play');
+  let i=0, timer=null, speed=1, r=0, sp=0, v=0;
+  const set=(id,val)=>el.querySelector(id).textContent=val;
+  function step(){
+    if(i>=A.length){stop();return;}
+    const e=A[i++]; r+=e.recovered; sp+=e.cost; if(e.revoked) v++;
+    set('#s-n',i.toLocaleString('en-IN')); set('#s-r',inr(r)); set('#s-s',inr(sp)); set('#s-v',v);
+    bar.style.width=(i/A.length*100)+'%';
+    feed.prepend($('<div class="fr"><span class="t">'+esc(e.at)+'</span>'
+      +'<span><span class="a">'+esc(e.action)+'</span> <span class="why">'+esc(e.reason)+'</span></span>'
+      +'<span class="m" style="color:'+(e.recovered>0?'var(--up)':e.cost>0?'var(--muted)':'inherit')+'">'
+      +(e.recovered>0?'+'+inr(e.recovered):e.cost>0?'−'+inr(e.cost):'')+'</span></div>'));
+    while(feed.children.length>90) feed.lastChild.remove();
+  }
+  function run(){stop(); timer=setInterval(step,Math.max(12,190/speed)); play.textContent='❚❚ Pause';}
+  function stop(){clearInterval(timer); timer=null; play.textContent='▶ Play';}
+  play.onclick=()=>timer?stop():run();
+  el.querySelector('#rst').onclick=()=>{stop(); i=0; r=0; sp=0; v=0; feed.innerHTML='';
+    set('#s-n','0'); set('#s-v','0'); set('#s-r','₹0'); set('#s-s','₹0'); bar.style.width='0';};
+  el.querySelectorAll('[data-sp]').forEach(b=>b.onclick=()=>{
+    speed=+b.dataset.sp;
+    el.querySelectorAll('[data-sp]').forEach(x=>x.setAttribute('aria-pressed',x===b));
+    if(timer) run();});
+})();
+
+go('overview');
 </script>
 </body>
 </html>

@@ -1,5 +1,4 @@
 {
- "generated_at": "26 Aug 2026, 22:07",
  "merchant": "Vahan",
  "support": "18002670001",
  "episodes": 1400,
@@ -15193,6 +15192,820 @@
     "cost": 0.55,
     "recovered": 0.0,
     "detail": "collect link not paid"
+   }
+  ],
+  "candles": [
+   {
+    "date": "2026-04-01",
+    "label": "01 Apr",
+    "open": 0,
+    "high": 0,
+    "low": -1,
+    "close": -1,
+    "events": 3
+   },
+   {
+    "date": "2026-04-02",
+    "label": "02 Apr",
+    "open": -1,
+    "high": 920,
+    "low": -2,
+    "close": 920,
+    "events": 5
+   },
+   {
+    "date": "2026-04-03",
+    "label": "03 Apr",
+    "open": 920,
+    "high": 1664,
+    "low": 920,
+    "close": 1662,
+    "events": 7
+   },
+   {
+    "date": "2026-04-04",
+    "label": "04 Apr",
+    "open": 1662,
+    "high": 1662,
+    "low": 1658,
+    "close": 1658,
+    "events": 9
+   },
+   {
+    "date": "2026-04-05",
+    "label": "05 Apr",
+    "open": 1658,
+    "high": 3010,
+    "low": 1658,
+    "close": 3007,
+    "events": 11
+   },
+   {
+    "date": "2026-04-06",
+    "label": "06 Apr",
+    "open": 3007,
+    "high": 38368,
+    "low": 3002,
+    "close": 38368,
+    "events": 127
+   },
+   {
+    "date": "2026-04-07",
+    "label": "07 Apr",
+    "open": 38368,
+    "high": 88440,
+    "low": 38363,
+    "close": 88440,
+    "events": 134
+   },
+   {
+    "date": "2026-04-08",
+    "label": "08 Apr",
+    "open": 88440,
+    "high": 116864,
+    "low": 88439,
+    "close": 116863,
+    "events": 68
+   },
+   {
+    "date": "2026-04-09",
+    "label": "09 Apr",
+    "open": 116863,
+    "high": 132473,
+    "low": 116863,
+    "close": 132473,
+    "events": 21
+   },
+   {
+    "date": "2026-04-10",
+    "label": "10 Apr",
+    "open": 132473,
+    "high": 143533,
+    "low": 132457,
+    "close": 143530,
+    "events": 53
+   },
+   {
+    "date": "2026-04-11",
+    "label": "11 Apr",
+    "open": 143530,
+    "high": 162787,
+    "low": 143514,
+    "close": 162787,
+    "events": 41
+   },
+   {
+    "date": "2026-04-12",
+    "label": "12 Apr",
+    "open": 162787,
+    "high": 179550,
+    "low": 162787,
+    "close": 179550,
+    "events": 53
+   },
+   {
+    "date": "2026-04-13",
+    "label": "13 Apr",
+    "open": 179550,
+    "high": 193657,
+    "low": 179550,
+    "close": 193657,
+    "events": 162
+   },
+   {
+    "date": "2026-04-14",
+    "label": "14 Apr",
+    "open": 193657,
+    "high": 209640,
+    "low": 193657,
+    "close": 209640,
+    "events": 123
+   },
+   {
+    "date": "2026-04-15",
+    "label": "15 Apr",
+    "open": 209640,
+    "high": 212960,
+    "low": 209640,
+    "close": 212957,
+    "events": 25
+   },
+   {
+    "date": "2026-04-16",
+    "label": "16 Apr",
+    "open": 212957,
+    "high": 227934,
+    "low": 212954,
+    "close": 227934,
+    "events": 75
+   },
+   {
+    "date": "2026-04-17",
+    "label": "17 Apr",
+    "open": 227934,
+    "high": 233563,
+    "low": 227918,
+    "close": 233563,
+    "events": 43
+   },
+   {
+    "date": "2026-04-18",
+    "label": "18 Apr",
+    "open": 233563,
+    "high": 245290,
+    "low": 233563,
+    "close": 245289,
+    "events": 30
+   },
+   {
+    "date": "2026-04-19",
+    "label": "19 Apr",
+    "open": 245289,
+    "high": 257277,
+    "low": 245289,
+    "close": 257276,
+    "events": 69
+   },
+   {
+    "date": "2026-04-20",
+    "label": "20 Apr",
+    "open": 257276,
+    "high": 273783,
+    "low": 257275,
+    "close": 273783,
+    "events": 177
+   },
+   {
+    "date": "2026-04-21",
+    "label": "21 Apr",
+    "open": 273783,
+    "high": 283659,
+    "low": 273781,
+    "close": 283659,
+    "events": 122
+   },
+   {
+    "date": "2026-04-22",
+    "label": "22 Apr",
+    "open": 283659,
+    "high": 292481,
+    "low": 283659,
+    "close": 292442,
+    "events": 71
+   },
+   {
+    "date": "2026-04-23",
+    "label": "23 Apr",
+    "open": 292442,
+    "high": 297374,
+    "low": 292440,
+    "close": 297371,
+    "events": 37
+   },
+   {
+    "date": "2026-04-24",
+    "label": "24 Apr",
+    "open": 297371,
+    "high": 300540,
+    "low": 297369,
+    "close": 300539,
+    "events": 14
+   },
+   {
+    "date": "2026-04-25",
+    "label": "25 Apr",
+    "open": 300539,
+    "high": 302024,
+    "low": 300539,
+    "close": 302008,
+    "events": 30
+   },
+   {
+    "date": "2026-04-26",
+    "label": "26 Apr",
+    "open": 302008,
+    "high": 304583,
+    "low": 302008,
+    "close": 304575,
+    "events": 23
+   },
+   {
+    "date": "2026-04-27",
+    "label": "27 Apr",
+    "open": 304575,
+    "high": 313937,
+    "low": 304570,
+    "close": 313924,
+    "events": 143
+   },
+   {
+    "date": "2026-04-28",
+    "label": "28 Apr",
+    "open": 313924,
+    "high": 322485,
+    "low": 313919,
+    "close": 322485,
+    "events": 105
+   },
+   {
+    "date": "2026-04-29",
+    "label": "29 Apr",
+    "open": 322485,
+    "high": 328598,
+    "low": 322484,
+    "close": 328592,
+    "events": 7
+   },
+   {
+    "date": "2026-04-30",
+    "label": "30 Apr",
+    "open": 328592,
+    "high": 332801,
+    "low": 328592,
+    "close": 332800,
+    "events": 4
+   },
+   {
+    "date": "2026-05-01",
+    "label": "01 May",
+    "open": 332800,
+    "high": 340578,
+    "low": 332800,
+    "close": 340575,
+    "events": 28
+   },
+   {
+    "date": "2026-05-02",
+    "label": "02 May",
+    "open": 340575,
+    "high": 358196,
+    "low": 340575,
+    "close": 358196,
+    "events": 32
+   },
+   {
+    "date": "2026-05-03",
+    "label": "03 May",
+    "open": 358196,
+    "high": 372457,
+    "low": 358196,
+    "close": 372457,
+    "events": 38
+   },
+   {
+    "date": "2026-05-04",
+    "label": "04 May",
+    "open": 372457,
+    "high": 403356,
+    "low": 372457,
+    "close": 403354,
+    "events": 112
+   },
+   {
+    "date": "2026-05-05",
+    "label": "05 May",
+    "open": 403354,
+    "high": 418302,
+    "low": 403353,
+    "close": 418301,
+    "events": 90
+   },
+   {
+    "date": "2026-05-06",
+    "label": "06 May",
+    "open": 418301,
+    "high": 448456,
+    "low": 418298,
+    "close": 448456,
+    "events": 68
+   },
+   {
+    "date": "2026-05-07",
+    "label": "07 May",
+    "open": 448456,
+    "high": 484275,
+    "low": 448456,
+    "close": 484255,
+    "events": 87
+   },
+   {
+    "date": "2026-05-08",
+    "label": "08 May",
+    "open": 484255,
+    "high": 508943,
+    "low": 484253,
+    "close": 508938,
+    "events": 51
+   },
+   {
+    "date": "2026-05-09",
+    "label": "09 May",
+    "open": 508938,
+    "high": 532146,
+    "low": 508938,
+    "close": 532145,
+    "events": 52
+   },
+   {
+    "date": "2026-05-10",
+    "label": "10 May",
+    "open": 532145,
+    "high": 544482,
+    "low": 532145,
+    "close": 544481,
+    "events": 41
+   },
+   {
+    "date": "2026-05-11",
+    "label": "11 May",
+    "open": 544481,
+    "high": 585979,
+    "low": 544481,
+    "close": 585978,
+    "events": 172
+   },
+   {
+    "date": "2026-05-12",
+    "label": "12 May",
+    "open": 585978,
+    "high": 606203,
+    "low": 585978,
+    "close": 606203,
+    "events": 113
+   },
+   {
+    "date": "2026-05-13",
+    "label": "13 May",
+    "open": 606203,
+    "high": 614693,
+    "low": 606202,
+    "close": 614687,
+    "events": 48
+   },
+   {
+    "date": "2026-05-14",
+    "label": "14 May",
+    "open": 614687,
+    "high": 620791,
+    "low": 614687,
+    "close": 620791,
+    "events": 51
+   },
+   {
+    "date": "2026-05-15",
+    "label": "15 May",
+    "open": 620791,
+    "high": 630582,
+    "low": 620791,
+    "close": 630582,
+    "events": 13
+   },
+   {
+    "date": "2026-05-16",
+    "label": "16 May",
+    "open": 630582,
+    "high": 639805,
+    "low": 630582,
+    "close": 639800,
+    "events": 29
+   },
+   {
+    "date": "2026-05-17",
+    "label": "17 May",
+    "open": 639800,
+    "high": 648400,
+    "low": 639793,
+    "close": 648395,
+    "events": 49
+   },
+   {
+    "date": "2026-05-18",
+    "label": "18 May",
+    "open": 648395,
+    "high": 669102,
+    "low": 648395,
+    "close": 669102,
+    "events": 175
+   },
+   {
+    "date": "2026-05-19",
+    "label": "19 May",
+    "open": 669102,
+    "high": 697157,
+    "low": 669102,
+    "close": 697157,
+    "events": 127
+   },
+   {
+    "date": "2026-05-20",
+    "label": "20 May",
+    "open": 697157,
+    "high": 705594,
+    "low": 697151,
+    "close": 705592,
+    "events": 46
+   },
+   {
+    "date": "2026-05-21",
+    "label": "21 May",
+    "open": 705592,
+    "high": 706491,
+    "low": 705585,
+    "close": 706467,
+    "events": 34
+   },
+   {
+    "date": "2026-05-22",
+    "label": "22 May",
+    "open": 706467,
+    "high": 709244,
+    "low": 706465,
+    "close": 709244,
+    "events": 23
+   },
+   {
+    "date": "2026-05-23",
+    "label": "23 May",
+    "open": 709244,
+    "high": 717528,
+    "low": 709237,
+    "close": 717522,
+    "events": 26
+   },
+   {
+    "date": "2026-05-24",
+    "label": "24 May",
+    "open": 717522,
+    "high": 724058,
+    "low": 717521,
+    "close": 724058,
+    "events": 25
+   },
+   {
+    "date": "2026-05-25",
+    "label": "25 May",
+    "open": 724058,
+    "high": 741254,
+    "low": 724057,
+    "close": 741251,
+    "events": 253
+   },
+   {
+    "date": "2026-05-26",
+    "label": "26 May",
+    "open": 741251,
+    "high": 757985,
+    "low": 741250,
+    "close": 757983,
+    "events": 111
+   },
+   {
+    "date": "2026-05-27",
+    "label": "27 May",
+    "open": 757983,
+    "high": 763142,
+    "low": 757981,
+    "close": 763142,
+    "events": 23
+   },
+   {
+    "date": "2026-05-28",
+    "label": "28 May",
+    "open": 763142,
+    "high": 763142,
+    "low": 763128,
+    "close": 763128,
+    "events": 35
+   },
+   {
+    "date": "2026-05-29",
+    "label": "29 May",
+    "open": 763128,
+    "high": 764294,
+    "low": 763125,
+    "close": 764294,
+    "events": 3
+   },
+   {
+    "date": "2026-05-30",
+    "label": "30 May",
+    "open": 764294,
+    "high": 766006,
+    "low": 764289,
+    "close": 766006,
+    "events": 6
+   },
+   {
+    "date": "2026-05-31",
+    "label": "31 May",
+    "open": 766006,
+    "high": 767263,
+    "low": 765999,
+    "close": 767261,
+    "events": 11
+   },
+   {
+    "date": "2026-06-01",
+    "label": "01 Jun",
+    "open": 767261,
+    "high": 771644,
+    "low": 767253,
+    "close": 771640,
+    "events": 72
+   },
+   {
+    "date": "2026-06-02",
+    "label": "02 Jun",
+    "open": 771640,
+    "high": 788396,
+    "low": 771639,
+    "close": 788396,
+    "events": 47
+   },
+   {
+    "date": "2026-06-03",
+    "label": "03 Jun",
+    "open": 788396,
+    "high": 800434,
+    "low": 788396,
+    "close": 800432,
+    "events": 32
+   },
+   {
+    "date": "2026-06-04",
+    "label": "04 Jun",
+    "open": 800432,
+    "high": 815213,
+    "low": 800431,
+    "close": 815213,
+    "events": 20
+   },
+   {
+    "date": "2026-06-05",
+    "label": "05 Jun",
+    "open": 815213,
+    "high": 818422,
+    "low": 815210,
+    "close": 818422,
+    "events": 10
+   },
+   {
+    "date": "2026-06-06",
+    "label": "06 Jun",
+    "open": 818422,
+    "high": 823266,
+    "low": 818411,
+    "close": 823266,
+    "events": 15
+   },
+   {
+    "date": "2026-06-07",
+    "label": "07 Jun",
+    "open": 823266,
+    "high": 844974,
+    "low": 823266,
+    "close": 844973,
+    "events": 30
+   },
+   {
+    "date": "2026-06-08",
+    "label": "08 Jun",
+    "open": 844973,
+    "high": 883242,
+    "low": 844973,
+    "close": 883242,
+    "events": 52
+   },
+   {
+    "date": "2026-06-09",
+    "label": "09 Jun",
+    "open": 883242,
+    "high": 905435,
+    "low": 883242,
+    "close": 905435,
+    "events": 33
+   },
+   {
+    "date": "2026-06-10",
+    "label": "10 Jun",
+    "open": 905435,
+    "high": 905435,
+    "low": 905432,
+    "close": 905432,
+    "events": 9
+   },
+   {
+    "date": "2026-06-15",
+    "label": "15 Jun",
+    "open": 905432,
+    "high": 905432,
+    "low": 905431,
+    "close": 905431,
+    "events": 5
+   },
+   {
+    "date": "2026-06-16",
+    "label": "16 Jun",
+    "open": 905431,
+    "high": 905431,
+    "low": 905430,
+    "close": 905430,
+    "events": 2
+   }
+  ]
+ },
+ "holdout": {
+  "seeds": 20,
+  "mean": 48197,
+  "sd": 31881,
+  "won": 19,
+  "t": 6.761,
+  "df": 19,
+  "p": 1.8540654284498307e-06,
+  "policies": [
+   {
+    "policy": "rebound_sequencer",
+    "mean_gap": 48197,
+    "min_gap": -9596,
+    "max_gap": 105860,
+    "won": 19
+   },
+   {
+    "policy": "fixed_ladder",
+    "mean_gap": 0,
+    "min_gap": 0,
+    "max_gap": 0,
+    "won": 0
+   },
+   {
+    "policy": "immediate_retry",
+    "mean_gap": -103966,
+    "min_gap": -150685,
+    "max_gap": -48295,
+    "won": 0
+   },
+   {
+    "policy": "disposition_rules",
+    "mean_gap": -127098,
+    "min_gap": -186422,
+    "max_gap": -39641,
+    "won": 0
+   },
+   {
+    "policy": "aggressive_contact",
+    "mean_gap": -998667,
+    "min_gap": -1118323,
+    "max_gap": -898064,
+    "won": 0
+   },
+   {
+    "policy": "no_recovery",
+    "mean_gap": -1143361,
+    "min_gap": -1253199,
+    "max_gap": -983465,
+    "won": 0
+   }
+  ],
+  "per_seed": [
+   {
+    "seed": "424242",
+    "group": "original_5",
+    "gap": -9596
+   },
+   {
+    "seed": "3579325300",
+    "group": "extension_15",
+    "gap": 11876
+   },
+   {
+    "seed": "280336933",
+    "group": "extension_15",
+    "gap": 14891
+   },
+   {
+    "seed": "3843154765",
+    "group": "extension_15",
+    "gap": 15332
+   },
+   {
+    "seed": "3761112615",
+    "group": "extension_15",
+    "gap": 18694
+   },
+   {
+    "seed": "777001",
+    "group": "original_5",
+    "gap": 19282
+   },
+   {
+    "seed": "3080938715",
+    "group": "extension_15",
+    "gap": 25439
+   },
+   {
+    "seed": "1755792334",
+    "group": "extension_15",
+    "gap": 26031
+   },
+   {
+    "seed": "1000003",
+    "group": "original_5",
+    "gap": 42038
+   },
+   {
+    "seed": "1572476406",
+    "group": "extension_15",
+    "gap": 51890
+   },
+   {
+    "seed": "3324745891",
+    "group": "extension_15",
+    "gap": 52194
+   },
+   {
+    "seed": "4153272497",
+    "group": "extension_15",
+    "gap": 53337
+   },
+   {
+    "seed": "708000794",
+    "group": "extension_15",
+    "gap": 58323
+   },
+   {
+    "seed": "402720561",
+    "group": "extension_15",
+    "gap": 69519
+   },
+   {
+    "seed": "8675309",
+    "group": "original_5",
+    "gap": 74125
+   },
+   {
+    "seed": "20260905",
+    "group": "original_5",
+    "gap": 78733
+   },
+   {
+    "seed": "931598567",
+    "group": "extension_15",
+    "gap": 81009
+   },
+   {
+    "seed": "94811503",
+    "group": "extension_15",
+    "gap": 86082
+   },
+   {
+    "seed": "1107941073",
+    "group": "extension_15",
+    "gap": 88873
+   },
+   {
+    "seed": "3043240076",
+    "group": "extension_15",
+    "gap": 105860
    }
   ]
  },
