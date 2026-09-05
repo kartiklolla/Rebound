@@ -291,7 +291,11 @@ function candlestick(host,candles,onChange){
   const c=P.candles||[], el=document.getElementById('v-overview');
   const last=c.length?c[c.length-1].close:0;
   let best=null, worst=null;
-  c.forEach(d=>{ if(!best||d.high>best.high) best=d; if(!worst||(d.close-d.open)<(worst.close-worst.open)) worst=d; });
+  c.forEach(d=>{ if(!best||d.events>(best?best.events:0)) best=d;
+                 if(!worst||(d.close-d.open)<(worst.close-worst.open)) worst=d; });
+  const downDays=c.filter(d=>d.close<d.open).length;
+  const worstDelta=worst?worst.close-worst.open:0;
+  const totalEvents=c.reduce((s,d)=>s+d.events,0);
 
   el.append($('<div class="grid stats">'
     +'<div class="stat up"><div class="k">Recovered</div><div class="v">'+inr(US.recovered)+'</div>'
@@ -316,12 +320,18 @@ function candlestick(host,candles,onChange){
         dDest=LAD.destroyed-US.destroyed, dNet=dRec+dSpend+dDest;
   el.append($('<div class="card" style="margin-bottom:18px"><header><div>'
     +'<h2>Recovering more, and still behind</h2>'
-    +'<div class="hint">every rupee of the difference against the ladder, on this seed</div></div></header>'
+    +'<div class="hint">total rupees across all '+DATA.episodes.toLocaleString('en-IN')
+    +' episodes — the card above states the same gap per 1,000</div></div></header>'
     +'<div class="pad"><div class="ev" style="max-width:620px">'
     +'<div class="l"><span>Collected that the ladder did not</span><span class="pos">'+sgn(dRec)+'</span></div>'
     +'<div class="l"><span>Spent less getting there</span><span class="pos">'+sgn(dSpend)+'</span></div>'
     +'<div class="l"><span>Mandates lost while recovering</span><span class="neg">'+sgn(dDest)+'</span></div>'
-    +'<div class="l tot"><span>Net against the ladder</span><span class="'+(dNet>0?'pos':'neg')+'">'+sgn(dNet)+'</span></div></div>'
+    /* The card and this total are the same quantity at different denominators.
+       Shown side by side because two near-identically labelled figures with
+       different values reads as an inconsistency until someone works out the
+       units. The per-1,000 value is Python's, not recomputed here. */
+    +'<div class="l tot"><span>Net against the ladder</span><span class="'+(dNet>0?'pos':'neg')+'">'
+    +sgn(dNet)+'<span style="font-weight:400;opacity:.65">&nbsp;&nbsp;=&nbsp; '+sgn(US.gap)+' / 1,000</span></span></div></div>'
     +'<div class="note" style="margin-top:14px;max-width:80ch">Net counts the future value of a revoked mandate, not just this cycle. '
     +'Both policies lose about the same <i>number</i> — '+Math.round(US.revocation*DATA.episodes)+' against '
     +Math.round(LAD.revocation*DATA.episodes)+' of '+DATA.episodes.toLocaleString('en-IN')+' — but the ladder never contacts anyone, '
@@ -353,12 +363,17 @@ function candlestick(host,candles,onChange){
     card.querySelectorAll('[data-z]').forEach(b=>b.onclick=()=>{
       const k=b.dataset.z; k==='reset'?api.reset():api.zoom(k==='in'?0.6:1.7);});
     el.append($('<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(210px,1fr));margin-top:18px">'
-      +'<div class="card pad"><h3 class="sec">Closing position</h3><div style="font-size:22px;font-weight:700;letter-spacing:-.6px">'+inr(last)+'</div>'
-      +'<div class="note">Negative under every policy. “Ahead” means less bad, not profitable.</div></div>'
-      +'<div class="card pad"><h3 class="sec">High-water mark</h3><div style="font-size:22px;font-weight:700;letter-spacing:-.6px">'+inr(best?best.high:0)+'</div>'
-      +'<div class="note">'+(best?esc(best.label):'—')+'</div></div>'
-      +'<div class="card pad"><h3 class="sec">Worst day</h3><div style="font-size:22px;font-weight:700;letter-spacing:-.6px">'+(worst?sgn(worst.close-worst.open):'—')+'</div>'
-      +'<div class="note">'+(worst?esc(worst.label):'—')+'</div></div></div>'));
+      +'<div class="card pad"><h3 class="sec">Cash collected, net of spend</h3>'
+      +'<div style="font-size:22px;font-weight:700;letter-spacing:-.6px">'+inr(last)+'</div>'
+      +'<div class="note">What the chart closes at. This is <b>not</b> net value — it excludes the '
+      +'mandates revoked along the way, which is what turns the comparison against the ladder negative.</div></div>'
+      +'<div class="card pad"><h3 class="sec">Days closing down</h3>'
+      +'<div style="font-size:22px;font-weight:700;letter-spacing:-.6px">'+downDays+' of '+c.length+'</div>'
+      +'<div class="note">Collections dominate spend, so most days close up. The down days are the ones '
+      +'that spent on presentations and collected nothing — the deepest is '+inr(Math.abs(worstDelta))+'.</div></div>'
+      +'<div class="card pad"><h3 class="sec">Busiest day</h3>'
+      +'<div style="font-size:22px;font-weight:700;letter-spacing:-.6px">'+(best?best.events:0)+' actions</div>'
+      +'<div class="note">'+(best?esc(best.label):'—')+' · '+totalEvents.toLocaleString('en-IN')+' actions across the campaign</div></div></div>'));
   } else card.querySelector('#ch').append($('<div class="note">No audit trail in this build.</div>'));
 })();
 
@@ -379,7 +394,7 @@ function candlestick(host,candles,onChange){
     return '<tr class="'+(us?'us':'')+'"><td>'+(us?'★ ':'')+esc(nm(p.policy))+'</td>'
       +'<td style="width:44%"><div class="bar"><i style="width:'+(Math.abs(p.mean_gap)/mx*100)+'%;background:'+col+'"></i></div></td>'
       +'<td class="num '+(p.mean_gap>0?'pos':p.mean_gap<0?'neg':'')+'">'+(p.policy==='fixed_ladder'?'baseline':sgn(p.mean_gap))+'</td>'
-      +'<td class="num">'+p.won+'/'+HO.seeds+'</td></tr>';
+      +'<td class="num">'+(p.policy==='fixed_ladder'?'—':p.won+'/'+HO.seeds)+'</td></tr>';
   }).join('');
   el.append($('<div class="card" style="margin-bottom:18px"><header><div><h2>Every policy against the fixed ladder</h2>'
     +'<div class="hint">mean net gap, ₹ per 1,000 episodes</div></div></header>'
@@ -513,11 +528,28 @@ function candlestick(host,candles,onChange){
 /* ---------------- live run ---------------- */
 (function(){
   const el=document.getElementById('v-live'), A=P.audit||[];
+  /* The replay is capped, so its counters land well short of the batch totals
+     on Overview. Unlabelled that reads as two figures failing to reconcile,
+     which is the worst thing a page like this can look like. */
+  const allEvents=(P.candles||[]).reduce((s,d)=>s+d.events,0)||A.length;
+  const shown=A.length, sampled=shown<allEvents;
+  const replayEps=new Set(A.map(x=>x.episode)).size;
   el.append($('<div class="grid stats">'
-    +'<div class="stat"><div class="k">Actions replayed</div><div class="v" id="s-n">0</div><div class="d">of '+A.length.toLocaleString('en-IN')+'</div></div>'
-    +'<div class="stat up"><div class="k">Recovered</div><div class="v" id="s-r">₹0</div><div class="d">collected from failed debits</div></div>'
-    +'<div class="stat down"><div class="k">Spent</div><div class="v" id="s-s">₹0</div><div class="d">gateway fees and messages</div></div>'
-    +'<div class="stat"><div class="k">Revocations</div><div class="v" id="s-v">0</div><div class="d">mandates lost while recovering</div></div></div>'));
+    +'<div class="stat"><div class="k">Actions replayed</div><div class="v" id="s-n">0</div>'
+    +'<div class="d">of <b>'+shown.toLocaleString('en-IN')+'</b> shown'
+    +(sampled?' · '+allEvents.toLocaleString('en-IN')+' in the run':'')+'</div></div>'
+    +'<div class="stat up"><div class="k">Recovered</div><div class="v" id="s-r">₹0</div>'
+    +'<div class="d">'+(sampled?'in this excerpt · <b>'+inr(US.recovered)+'</b> across the run':'collected from failed debits')+'</div></div>'
+    +'<div class="stat down"><div class="k">Spent</div><div class="v" id="s-s">₹0</div>'
+    +'<div class="d">'+(sampled?'in this excerpt · <b>'+inr(US.spent)+'</b> across the run':'gateway fees and messages')+'</div></div>'
+    +'<div class="stat"><div class="k">Revocations</div><div class="v" id="s-v">0</div>'
+    +'<div class="d">'+(sampled?'in this excerpt · <b>'+Math.round(US.revocation*DATA.episodes)+'</b> across the run':'mandates lost while recovering')+'</div></div></div>'));
+  if(sampled) el.append($('<div class="warnbox" style="margin-bottom:18px">'
+    +'<b>This is the first '+shown.toLocaleString('en-IN')+' of '+allEvents.toLocaleString('en-IN')
+    +' actions</b> — about '+Math.round(shown/allEvents*100)+'% of the campaign, covering '
+    +replayEps.toLocaleString('en-IN')+' of '+DATA.episodes.toLocaleString('en-IN')+' episodes. '
+    +'The counters below stop well short of the totals on Overview for that reason, not because the two disagree. '
+    +'The candlestick on Overview is drawn from the whole run.</div>'));
   el.append($('<div class="card"><header><div><h2>Recorded rollout</h2>'
     +'<div class="hint">nothing here is recomputed in the browser</div></div>'
     +'<div class="ctrls"><button class="btn" id="play">▶ Play</button>'
